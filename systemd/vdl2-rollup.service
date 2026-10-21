@@ -1,0 +1,6 @@
+[Unit]
+Description=VDL2 Observatory: fold the archive into the database
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/vdl2-sniffer/observatory/rollup.py --archive %h/vdl2-sniffer/archive --db %h/vdl2-sniffer/observatory/observatory.db

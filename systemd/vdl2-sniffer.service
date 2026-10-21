@@ -1,0 +1,15 @@
+# vdl2-sniffer on an RTL-SDR, as a systemd user service.
+# Station options (feeds, station id, gain) go in ~/.config/vdl2-sniffer.env;
+# see vdl2-sniffer.env.example. The checkout is expected at ~/vdl2-sniffer.
+[Unit]
+Description=vdl2-sniffer: VDL2 receiver on the RTL-SDR
+After=network-online.target
+
+[Service]
+EnvironmentFile=-%h/.config/vdl2-sniffer.env
+ExecStart=%h/vdl2-sniffer/build/vdl2-sniffer --rtlsdr 0 --archive %h/vdl2-sniffer/archive $VDL2_ARGS
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

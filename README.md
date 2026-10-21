@@ -29,11 +29,14 @@ ADS-C) and MIAM are decoded. Without it, the engine still decodes and logs every
 ## Run
 
 The receiver wants 1.05 MS/s, centred so that every channel is a multiple of 12.5 kHz from the
-centre. `--print-centre` gives the frequency to tune to. Live input comes from a receiver program
-on stdin:
+centre. With an RTL-SDR (built with librtlsdr) vdl2-sniffer tunes and reads the device itself;
+other receivers come through a receiver program on stdin, tuned to `--print-centre`:
 
 ```bash
-# RTL-SDR, US channel plan
+# RTL-SDR, US channel plan, tuner AGC
+vdl2-sniffer --rtlsdr --archive ~/vdl2-archive --udp 127.0.0.1:5555 --station-id XX-VDL2
+
+# The same through rtl_sdr
 rtl_sdr -f $(vdl2-sniffer --print-centre) -s 1050000 -g 40 - \
   | vdl2-sniffer --archive ~/vdl2-archive --udp 127.0.0.1:5555 --station-id XX-VDL2
 
@@ -46,6 +49,7 @@ Other rates and centres are mixed and resampled, so 2.5 MS/s from an Airspy R2 a
 
 | Option | |
 | --- | --- |
+| `--rtlsdr [DEV]` | read an RTL-SDR directly: index or serial (default 0); `--gain DB` (default auto), `--ppm N`, `--bias-tee`. If the decoder falls behind, whole buffers are dropped and reported once a minute, and frame times stay true. If the device goes away, vdl2-sniffer exits with status 1 for a service manager to restart it |
 | `-r FILE` / `-` | IQ file or stdin; `--format cu8\|cs8\|ci16\|cf32` (from the extension by default, cu8 on stdin) |
 | `-s HZ`, `-c HZ` | input rate (default 1050000) and centre (default: the plan's centre) |
 | `--plan us\|eu`, `--channels LIST` | channel plan, or channels in MHz or Hz |
@@ -88,6 +92,24 @@ python3 observatory/server.py --db observatory/observatory.db      # http://HOST
 `rollup.py` reads only what was appended since its last run, so run it every few minutes from a
 timer or cron. The server reads the database only and never talks to vdl2-sniffer. Port 8891 is
 chosen so that it can sit beside iridium-observatory's dashboard on 8890.
+
+## Running as a service
+
+`systemd/` has user units for a receiver that runs on its own: `vdl2-sniffer.service` (the RTL-SDR,
+restarted if it stops), `vdl2-rollup.timer` (the rollup every minute) and `vdl2-observatory.service`
+(the dashboard on 8891). They expect the checkout at `~/vdl2-sniffer` and need no root:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/*.service systemd/*.timer ~/.config/systemd/user/
+cp systemd/vdl2-sniffer.env.example ~/.config/vdl2-sniffer.env   # feeds, station id, gain
+systemctl --user daemon-reload
+systemctl --user enable --now vdl2-sniffer.service vdl2-rollup.timer vdl2-observatory.service
+loginctl enable-linger      # keep them running after logout and start them at boot
+```
+
+`journalctl --user -u vdl2-sniffer -f` shows the frames as they arrive. After editing
+`~/.config/vdl2-sniffer.env`, run `systemctl --user restart vdl2-sniffer`.
 
 ## Archive events
 
@@ -144,8 +166,8 @@ dashboard estimates each station's position instead, from the positions of aircr
 
 ## Known gaps
 
-- No direct SDR support yet: live input comes through `rtl_sdr` or `airspy_rx` on stdin.
-- No installer, service unit or live map yet.
+- Direct input from RTL-SDR only (`--rtlsdr`); other receivers come through stdin (`airspy_rx`).
+- No installer or live map yet.
 - `sig_level` and `noise_level` are not in the JSON. The receiver measures SNR only, which is in
   `snr`.
 - The air/ground status bit is read but untested: no capture has an aircraft on the ground.

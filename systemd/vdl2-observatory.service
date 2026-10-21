@@ -1,0 +1,10 @@
+[Unit]
+Description=VDL2 Observatory dashboard on :8891
+
+[Service]
+ExecStart=/usr/bin/python3 %h/vdl2-sniffer/observatory/server.py --db %h/vdl2-sniffer/observatory/observatory.db --port 8891 --host 0.0.0.0
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
