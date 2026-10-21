@@ -270,8 +270,11 @@ VDL2_PAGE = r"""<!doctype html>
   .gl{stroke:var(--grid);stroke-width:1}
   .empty{color:var(--dim);padding:30px;text-align:center;font-size:13px}
   .bar:hover{opacity:.82}
-  .mapax{fill:var(--dim);font-size:24px}
-  .maplbl{fill:var(--fg);font-size:28px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .mapax{fill:var(--dim);font-size:11px}
+  .maplbl{fill:var(--fg);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;cursor:pointer}
+  .stsel{color:var(--dim);font-size:12px;min-height:16px;margin-top:6px}
+  .strow{cursor:pointer}
+  .strow.on td{background:#182634}
   table{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:8px}
   th{color:var(--dim);font-weight:500;text-align:right;padding:4px 8px;
     border-bottom:1px solid var(--line);white-space:nowrap}
@@ -303,6 +306,11 @@ VDL2_PAGE = r"""<!doctype html>
     <div class="legend" id="ch-legend"></div>
     <div id="frames"></div>
   </div>
+  <div class="panel">
+    <h2>Station map <span class="hint">each station at the centre of the positions of aircraft talking to or hearing it, all time; biased towards this receiver for distant stations. Click a station (here or in Ground stations) for its spread and positions</span></h2>
+    <div id="stmap"></div>
+    <div id="stsel" class="stsel"></div>
+  </div>
   <div class="grid">
     <div>
       <div class="panel">
@@ -324,10 +332,6 @@ VDL2_PAGE = r"""<!doctype html>
       </div>
     </div>
     <div>
-      <div class="panel">
-        <h2>Station map <span class="hint">centre of the positions of aircraft talking to or hearing each station, all time; biased towards this receiver for distant stations</span></h2>
-        <div id="stmap"></div>
-      </div>
       <div class="panel">
         <h2>Ground stations <span class="hint">frames to or from, in window</span></h2>
         <div id="stations"></div>
@@ -413,13 +417,27 @@ function lineChart(host,rows,color){
 }
 function ll(lat,lon){return Math.abs(lat).toFixed(1)+(lat<0?'S ':'N ')+
   Math.abs(lon).toFixed(1)+(lon<0?'W':'E');}
-// Stations (squares, with their spread as a ring) and the aircraft positions
-// behind them (dots, each tied to the station it handed off to). Equirectangular
-// around the data, scaled by the middle latitude; no tiles, so it works offline.
+// Stations (squares) and the aircraft positions behind them (dots), drawn at
+// the panel's own pixel size. Equirectangular around the data, scaled by the
+// middle latitude; no tiles, so it works offline. A selected station (SEL)
+// shows its spread as a ring and lines to the positions that placed it;
+// everything else dims. Labels that would overlap are left off (the
+// station's details stay in its tooltip), busiest stations first.
+// #st=ID in the address selects a station, so a view can be shared.
+let SEL=(location.hash.match(/st=([0-9A-Fa-f]{6})/)||[])[1]||null, MAPDATA=null;
+if(SEL)SEL=SEL.toUpperCase();
+function selectStation(id){SEL=SEL===id?null:id;
+  history.replaceState(null,"",SEL?"#st="+SEL:location.pathname+location.search);
+  if(MAPDATA)stationMap(...MAPDATA);markStationRows();}
+function markStationRows(){document.querySelectorAll("#stations tr[data-st]").forEach(tr=>
+  tr.classList.toggle("on",tr.dataset.st===SEL));}
 function stationMap(host,all,pos){
+  MAPDATA=[host,all,pos];
+  const info=document.getElementById("stsel");
   const st=all.filter(x=>x.lat!=null);
   if(!st.length){emptyMsg(host,all.length?"no station has "+3+" different aircraft positions yet":
-    "no aircraft position reports yet");return;}
+    "no aircraft position reports yet");info.textContent="";return;}
+  if(SEL&&!st.some(x=>x.station===SEL))SEL=null;
   // only the reports near an estimated station: one receiver's aircraft
   // should not shrink another receiver's stations to a dot
   const near=(p,x)=>Math.hypot(p.lat-x.lat,(p.lon-x.lon)*Math.cos(x.lat*Math.PI/180))*111<600;
@@ -428,34 +446,64 @@ function stationMap(host,all,pos){
   let la0=Math.min(...pts.map(p=>p[0])),la1=Math.max(...pts.map(p=>p[0]));
   let lo0=Math.min(...pts.map(p=>p[1])),lo1=Math.max(...pts.map(p=>p[1]));
   const k=Math.cos((la0+la1)/2*Math.PI/180);
-  const pad=Math.max(0.5,(la1-la0)*0.12,(lo1-lo0)*k*0.12);
+  const pad=Math.max(0.3,(la1-la0)*0.08,(lo1-lo0)*k*0.08);
   la0-=pad;la1+=pad;lo0-=pad/k;lo1+=pad/k;
-  const W=1000,H=Math.max(260,Math.min(620,W*(la1-la0)/((lo1-lo0)*k)));
+  const W=Math.max(320,host.clientWidth||900);
+  const H=Math.round(Math.max(280,Math.min(560,W*(la1-la0)/((lo1-lo0)*k))));
   const sc=Math.min(W/((lo1-lo0)*k),H/(la1-la0));
   const X=lo=>(lo-lo0)*k*sc+(W-(lo1-lo0)*k*sc)/2, Y=la=>(la1-la)*sc+(H-(la1-la0)*sc)/2;
-  host.innerHTML="";const s=el("svg",{viewBox:"0 0 "+W+" "+H});host.appendChild(s);
-  s.appendChild(el("rect",{x:0,y:0,width:W,height:H,fill:"none",stroke:"var(--line)"}));
-  for(let g=Math.ceil(lo0);g<=lo1;g++){if(g%2)continue;
+  host.innerHTML="";const s=el("svg",{viewBox:"0 0 "+W+" "+H,width:W,height:H});host.appendChild(s);
+  const bg=el("rect",{x:0,y:0,width:W,height:H,fill:"transparent",stroke:"var(--line)"});
+  bg.addEventListener("click",()=>{if(SEL)selectStation(SEL);});s.appendChild(bg);
+  const step=(lo1-lo0)>8?2:1;
+  for(let g=Math.ceil(lo0);g<=lo1;g++){if(g%step)continue;
     s.appendChild(el("line",{x1:X(g),y1:0,x2:X(g),y2:H,class:"gl"}));
-    s.appendChild(el("text",{x:X(g)+6,y:H-10,class:"mapax"},Math.abs(g)+(g<0?"W":"E")));}
-  for(let g=Math.ceil(la0);g<=la1;g++){if(g%2)continue;
+    s.appendChild(el("text",{x:X(g)+4,y:H-6,class:"mapax"},Math.abs(g)+(g<0?"W":"E")));}
+  for(let g=Math.ceil(la0);g<=la1;g++){if(g%step)continue;
     s.appendChild(el("line",{x1:0,y1:Y(g),x2:W,y2:Y(g),class:"gl"}));
-    s.appendChild(el("text",{x:8,y:Y(g)-8,class:"mapax"},Math.abs(g)+(g<0?"S":"N")));}
+    s.appendChild(el("text",{x:4,y:Y(g)-4,class:"mapax"},Math.abs(g)+(g<0?"S":"N")));}
   const at={};st.forEach(x=>at[x.station]=x);
-  pos.forEach(p=>{const t=at[p.gs];if(!t)return;
-    s.appendChild(el("line",{x1:X(p.lon),y1:Y(p.lat),x2:X(t.lon),y2:Y(t.lat),
-      stroke:"#2f6feb","stroke-opacity":.45,"stroke-width":3}));});
-  pos.forEach(p=>{const c=el("circle",{cx:X(p.lon),cy:Y(p.lat),r:8,fill:"#8b98a5"});
+  const sel=SEL?at[SEL]:null;
+  if(sel){
+    if(sel.spread_km)s.appendChild(el("circle",{cx:X(sel.lon),cy:Y(sel.lat),r:sel.spread_km/111*sc,
+      fill:"#4aa8ff","fill-opacity":.06,stroke:"#4aa8ff","stroke-opacity":.6,"stroke-width":1.5,"stroke-dasharray":"6 5"}));
+    pos.forEach(p=>{if(p.gs!==SEL)return;
+      s.appendChild(el("line",{x1:X(p.lon),y1:Y(p.lat),x2:X(sel.lon),y2:Y(sel.lat),
+        stroke:"#4aa8ff","stroke-opacity":.5,"stroke-width":1}));});
+  }
+  pos.forEach(p=>{const mine=sel&&p.gs===SEL;
+    const c=el("circle",{cx:X(p.lon),cy:Y(p.lat),r:mine?4:2.5,fill:mine?"#e6edf3":"#8b98a5",
+      "fill-opacity":sel&&!mine?.2:.6});
     c.appendChild(el("title",null,p.icao+" → "+p.gs+" at "+ll(p.lat,p.lon)+" ("+p.src+")"));s.appendChild(c);});
-  st.forEach(x=>{const cx=X(x.lon),cy=Y(x.lat);
-    if(x.spread_km)s.appendChild(el("circle",{cx:cx,cy:cy,r:x.spread_km/111*sc,fill:"#4aa8ff",
-      "fill-opacity":.06,stroke:"#4aa8ff","stroke-opacity":.45,"stroke-width":3,"stroke-dasharray":"10 8"}));
-    const r=el("rect",{x:cx-12,y:cy-12,width:24,height:24,rx:4,fill:"#4aa8ff"});
+  // labels: the selected station first, then the busiest; a label goes in the
+  // first spot around its square that hits no other label or square
+  const boxes=st.map(x=>[X(x.lon)-6,Y(x.lat)-6,12,12,x.station]);
+  const hit=(a,b)=>a[0]<b[0]+b[2]&&b[0]<a[0]+a[2]&&a[1]<b[1]+b[3]&&b[1]<a[1]+a[3];
+  const order=st.slice().sort((a,b)=>(b.station===SEL)-(a.station===SEL)||b.n_pos-a.n_pos);
+  const labels=[];
+  order.forEach(x=>{const cx=X(x.lon),cy=Y(x.lat),t=x.station+" ("+x.n_pos+")",w=t.length*7.3,h=13;
+    const spots=[[10,-h/2],[-10-w,-h/2],[-w/2,-8-h],[-w/2,8],[10,-h-6],[10,6],[-10-w,-h-6],[-10-w,6]];
+    for(const [dx,dy] of spots){const b=[cx+dx,cy+dy,w,h];
+      if(b[0]<0||b[1]<0||b[0]+w>W||b[1]+h>H)continue;
+      if(labels.some(l=>hit(b,l))||boxes.some(q=>q[4]!==x.station&&hit(b,q)))continue;
+      labels.push(b);
+      const tx=el("text",{x:b[0],y:b[1]+h-2,class:"maplbl","fill-opacity":sel&&x!==sel?.35:1},t);
+      tx.addEventListener("click",e=>{e.stopPropagation();selectStation(x.station);});
+      s.appendChild(tx);break;}});
+  st.forEach(x=>{const cx=X(x.lon),cy=Y(x.lat),on=x.station===SEL;
+    const r=el("rect",{x:cx-(on?7:5),y:cy-(on?7:5),width:on?14:10,height:on?14:10,rx:2,fill:on?"#e6edf3":"#4aa8ff",
+      "fill-opacity":sel&&!on?.35:1,style:"cursor:pointer"});
     r.appendChild(el("title",null,x.station+": "+ll(x.lat,x.lon)+", ±"+x.spread_km+" km from "+
       x.n_pos+" positions ("+x.n_target+" from aircraft talking to it, "+x.n_heard+" from XID alternate lists)"));
-    s.appendChild(r);
-    s.appendChild(el("text",{x:cx+20,y:cy+10,class:"maplbl"},x.station+" ("+x.n_pos+")"));});
+    r.addEventListener("click",e=>{e.stopPropagation();selectStation(x.station);});
+    s.appendChild(r);});
+  info.textContent=sel?sel.station+": "+ll(sel.lat,sel.lon)+", ±"+sel.spread_km+" km from "+sel.n_pos+
+    " positions ("+sel.n_target+" from aircraft talking to it, "+sel.n_heard+" from XID alternate lists). Click again to clear."
+    :st.length+" stations placed, "+pos.length+" positions";
 }
+let resizeTimer=null;
+window.addEventListener("resize",()=>{clearTimeout(resizeTimer);
+  resizeTimer=setTimeout(()=>{if(MAPDATA)stationMap(...MAPDATA);},200);});
 function card(k,v,sub,hot){return '<div class="card'+(hot?' hot':'')+
   '"><div class="k">'+k+'</div><div class="v">'+v+
   (sub?' <small>'+sub+'</small>':'')+'</div></div>';}
@@ -530,11 +578,13 @@ function render(d){
     d.stations.map(g=>{const e=est[g.station];
       const pos=!e?'–':e.lat==null?'<span style="color:var(--dim)">too few reports ('+e.n_pos+')</span>':
         ll(e.lat,e.lon)+' <span style="color:var(--dim)">±'+e.spread_km+' km, '+e.n_pos+' positions</span>';
-      return '<tr><td class="mono">'+esc(g.station)+'</td><td style="width:30%">'+
+      return '<tr class="strow" data-st="'+esc(g.station)+'"><td class="mono">'+esc(g.station)+'</td><td style="width:30%">'+
       '<div style="height:9px;border-radius:2px;background:#2f6feb;width:'+
       Math.max(1,100*g.count/top).toFixed(0)+'%"></div></td><td>'+fmt(g.count)+'</td><td>'+pos+'</td><td>'+
       dayLabel(g.last)+' '+hourLabel(g.last)+'</td></tr>';}).join("")+'</table>';}
+  sh.querySelectorAll("tr[data-st]").forEach(tr=>tr.addEventListener("click",()=>selectStation(tr.dataset.st)));
   stationMap(document.getElementById("stmap"),d.station_est||[],d.positions||[]);
+  markStationRows();
   const at=document.getElementById("aircraft");
   if(!d.aircraft.length)emptyMsg(at,"no aircraft");
   else at.innerHTML='<table><tr><th>ICAO</th><th>Frames</th><th>Best SNR, dB</th><th>Last heard</th></tr>'+
