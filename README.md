@@ -57,6 +57,8 @@ Other rates and centres are mixed and resampled, so 2.5 MS/s from an Airspy R2 a
 | `--json [FILE]` | one dumpvdl2-style JSON object per frame (stdout by default); `--raw` adds the AVLC octets. XID frames use dumpvdl2's layout (`pub_params`, `vdl_params`), which feed parsers such as acars_router require; on the ten captures every frame passes acars_vdlm2_parser |
 | `--udp HOST:PORT` | the same JSON over UDP (acarshub, airframes) |
 | `--archive [DIR]` | `vdl2-YYYYMMDD.jsonl` for the Observatory (default `./archive`) |
+| `--basestation[=PORT]` | BaseStation (SBS) `MSG,3` positions for tar1090, VRS and the like: a server on PORT (default 30003) that tools connect to, or `--basestation=HOST:PORT` to push to one (reconnects by itself) |
+| `--basestation-fix` | also send positions taken from a named fix (off by default: the aircraft may be well past it) |
 | `--waypoints FILE` | fix list for positions from ACARS text (default: the installed `waypoints.csv`; `none` turns the fallback off) |
 | `-q` | no line per frame |
 
@@ -110,6 +112,18 @@ loginctl enable-linger      # keep them running after logout and start them at b
 
 `journalctl --user -u vdl2-sniffer -f` shows the frames as they arrive. After editing
 `~/.config/vdl2-sniffer.env`, run `systemctl --user restart vdl2-sniffer`.
+
+## BaseStation output
+
+`--basestation` sends each aircraft position as an SBS `MSG,3` line under the aircraft's ICAO address,
+with the flight from its latest ACARS message as the callsign:
+
+- coordinates in ACARS text (precise), and
+- XID handoff positions (0.1 degree, about 10 km, with the reported altitude).
+
+Speed and heading are derived only between two precise positions, at least 10 s apart; a coarse
+XID position would turn them into noise. The code is iridium-sniffer's `basestation.c`, adapted:
+VDL2 frames carry the ICAO address, so no aircraft database is needed.
 
 ## Archive events
 

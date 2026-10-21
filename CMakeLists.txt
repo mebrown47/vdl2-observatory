@@ -16,6 +16,7 @@ add_executable(vdl2-sniffer
     vdl2_xid.cc
     acars_position.c
     waypoint_db.c
+    basestation.c
     third_party/vdl2/vdl2_decoder.cc
     third_party/vdl2/vdl2_rs.cc
     third_party/vdl2/vdl2_acars.cc)

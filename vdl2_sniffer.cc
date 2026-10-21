@@ -19,6 +19,7 @@
 #include "vdl2_xid.hh"
 
 #include "acars_position.h"
+#include "basestation.h"
 #include "waypoint_db.h"
 
 #include <arpa/inet.h>
@@ -105,6 +106,8 @@ struct Options {
     std::string stationId;
     std::string archive;             // "" off
     std::string waypoints;           // fix list; "" = the installed one, "none" = off
+    std::string basestation;         // SBS: "PORT" to serve, "HOST:PORT" to push; "" off
+    bool basestationFix = false;     // SBS: also positions from a named fix
     double maxSeconds = 0;
     bool printCentre = false;
     bool raw = false;                // AVLC octets in the JSON, for A/B checks
@@ -133,6 +136,10 @@ static void usage(FILE* out) {
         "      --station-id ID   station id in the JSON\n"
         "      --raw             add the AVLC octets (hex) to the JSON\n"
         "      --archive [DIR]   JSONL archive for the Observatory (default ./archive)\n"
+        "      --basestation[=PORT]     SBS server on PORT (default 30003, tools connect in)\n"
+        "      --basestation=HOST:PORT  SBS push to a remote host (auto-reconnect)\n"
+        "      --basestation-fix  also send positions from a named fix (the aircraft may be\n"
+        "                        well past it; default: only reported coordinates)\n"
         "      --max-seconds S   stop after S seconds of input\n"
         "      --waypoints FILE  fix list for positions from ACARS text (IDENT,LAT,LON;\n"
         "                        default: the installed waypoints.csv; none = off)\n"
@@ -194,6 +201,8 @@ static bool parseOptions(int argc, char** argv, Options& o) {
         else if (k == "--raw") o.raw = true;
         else if (k == "--station-id") { if (!need()) return false; o.stationId = val; }
         else if (k == "--archive") { maybe("archive"); o.archive = val; }
+        else if (k == "--basestation") { maybe("30003"); o.basestation = val; }
+        else if (k == "--basestation-fix") o.basestationFix = true;
         else if (k == "--max-seconds") { if (!need()) return false; o.maxSeconds = atof(val.c_str()); }
         else if (k == "--waypoints") { if (!need()) return false; o.waypoints = val; }
         else if (k == "-q" || k == "--quiet") o.quiet = true;
@@ -663,6 +672,8 @@ int main(int argc, char** argv) {
     if (!o.udp.empty() && !udp.open(o.udp)) return 1;
     Archive archive;
     if (!o.archive.empty() && !archive.open(o.archive)) return 1;
+    const bool sbs = !o.basestation.empty();
+    if (sbs && basestation_init(o.basestation.c_str()) < 0) return 1;
     // Fixes named in ACARS text are a last-resort position, as in
     // iridium-sniffer. Without the list that fallback is simply off.
     if (o.waypoints != "none") {
@@ -715,6 +726,7 @@ int main(int argc, char** argv) {
     // repeats the one its first block already gave.
     struct LastPos { double lat, lon, t; };
     std::map<uint32_t, LastPos> lastPos;
+    std::map<uint32_t, std::string> lastFlight;   // for the SBS callsign
     auto onFrame = [&](const V::Frame& f) {
         nFrames++;
         const size_t ci = chanIndex.count(f.frequency) ? chanIndex[f.frequency] : 0;
@@ -773,6 +785,34 @@ int main(int argc, char** argv) {
                        t - it->second.t < 60);
             if (newPos) nPos++;
             lastPos[aircraft] = {plat, plon, t};
+        }
+
+        // BaseStation (SBS): what the aircraft reported, under its ICAO
+        // address, with the flight from its latest ACARS. Coordinates in
+        // the text are precise; an XID position is 0.1 degree (about
+        // 10 km), sent but not used for speed and heading; a named fix only
+        // with --basestation-fix.
+        if (sbs) {
+            const bool acSource = f.sourceKind == 1, acDest = f.destKind == 1;
+            const uint32_t aircraft = acSource ? f.source : f.dest;
+            if (ac && (acSource || acDest)) {
+                const std::string fl = trimPad(ac->flight, ' ');
+                if (!fl.empty()) lastFlight[aircraft] = fl;
+            }
+            auto flight = [&](uint32_t a) {
+                auto it = lastFlight.find(a);
+                return it == lastFlight.end() ? std::string() : it->second;
+            };
+            const uint64_t tNs = tUs * 1000;
+            const bool text = psrc && !strcmp(psrc, "text");
+            if (newPos && (text || o.basestationFix))
+                basestation_send_position(hex6(aircraft).c_str(), flight(aircraft).c_str(),
+                                          plat, plon, -99999, text ? 1 : 0, tNs);
+            if (xid && xid->aircraftLocation && acSource) {
+                const auto& l = *xid->aircraftLocation;
+                basestation_send_position(hex6(f.source).c_str(), flight(f.source).c_str(),
+                                          l.lat, l.lon, l.altFt ? *l.altFt : -99999, 0, tNs);
+            }
         }
 
         // dumpvdl2-style JSON
@@ -1004,6 +1044,7 @@ int main(int argc, char** argv) {
     }
     flushMinute();
 
+    if (sbs) basestation_destroy();
     bool deviceFailed = false;
 #ifdef HAVE_RTLSDR
     if (live) {
