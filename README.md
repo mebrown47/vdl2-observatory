@@ -108,7 +108,9 @@ completes it.
 Positions come only from messages the aircraft sent (`acars_position.c`). Only labels known to
 report the aircraft's current position count (H1, 20, 44, 4J, 15, SA; not H1 flight plans).
 Coordinates written in the text come first (`POSN46247W101478`, `N33521W084123`,
-`LAT N 46:27.2 LONG W101:39.7` and similar). Failing that, a `POS` report that names a fix instead
+`LAT N 46:27.2 LONG W101:39.7` and similar). Trajectory and weather reports carry several timed
+records, oldest first, and the newest one counts: `TRP` reports (`TRP 110814  32.8998  -97.0403`,
+records `/A1` to `/A5`, or `#`-separated) and degrees-and-minutes records (`N3006.4,W08531.3,210145`). Failing that, a `POS` report that names a fix instead
 of coordinates gives that fix, looked up in the fix list; the aircraft may be well past it. The fix
 lookup is held to `POS` reports because anywhere else it matches ordinary words. Positions go into
 the JSON (`ac_pos`), the `acars` and `vpos` archive events and the summary line.
@@ -146,8 +148,7 @@ dashboard estimates each station's position instead, from the positions of aircr
 - `sig_level` and `noise_level` are not in the JSON. The receiver measures SNR only, which is in
   `snr`.
 - The air/ground status bit is read but untested: no capture has an aircraft on the ground.
-- Some position reports are not parsed yet: H1 `TRP` reports with signed decimal degrees, and
-  `N3006.4,W08531.3` (degrees and decimal minutes).
+- Packed trajectory records (`C1TRP` with `/C2324491,-0866412`) are not parsed.
 - CPU: about 11% of a core per channel at 1.05 MS/s.
 
 ## Licence
