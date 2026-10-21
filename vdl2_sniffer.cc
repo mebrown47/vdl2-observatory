@@ -20,6 +20,7 @@
 
 #include "acars_position.h"
 #include "basestation.h"
+#include "web.hh"
 #include "waypoint_db.h"
 
 #include <arpa/inet.h>
@@ -108,6 +109,7 @@ struct Options {
     std::string waypoints;           // fix list; "" = the installed one, "none" = off
     std::string basestation;         // SBS: "PORT" to serve, "HOST:PORT" to push; "" off
     bool basestationFix = false;     // SBS: also positions from a named fix
+    int webPort = 0;                 // --web: the live page on this port; 0 off
     double maxSeconds = 0;
     bool printCentre = false;
     bool raw = false;                // AVLC octets in the JSON, for A/B checks
@@ -136,6 +138,8 @@ static void usage(FILE* out) {
         "      --station-id ID   station id in the JSON\n"
         "      --raw             add the AVLC octets (hex) to the JSON\n"
         "      --archive [DIR]   JSONL archive for the Observatory (default ./archive)\n"
+        "      --web[=PORT]      the live page: aircraft, messages, handoffs and a map, served\n"
+        "                        by vdl2-sniffer itself on PORT (default 8889)\n"
         "      --basestation[=PORT]     SBS server on PORT (default 30003, tools connect in)\n"
         "      --basestation=HOST:PORT  SBS push to a remote host (auto-reconnect)\n"
         "      --basestation-fix  also send positions from a named fix (the aircraft may be\n"
@@ -203,6 +207,11 @@ static bool parseOptions(int argc, char** argv, Options& o) {
         else if (k == "--archive") { maybe("archive"); o.archive = val; }
         else if (k == "--basestation") { maybe("30003"); o.basestation = val; }
         else if (k == "--basestation-fix") o.basestationFix = true;
+        else if (k == "--web") {
+            maybe("8889");
+            o.webPort = atoi(val.c_str());
+            if (o.webPort <= 0 || o.webPort > 65535) { fprintf(stderr, "vdl2-sniffer: bad --web port %s\n", val.c_str()); return false; }
+        }
         else if (k == "--max-seconds") { if (!need()) return false; o.maxSeconds = atof(val.c_str()); }
         else if (k == "--waypoints") { if (!need()) return false; o.waypoints = val; }
         else if (k == "-q" || k == "--quiet") o.quiet = true;
@@ -674,6 +683,9 @@ int main(int argc, char** argv) {
     if (!o.archive.empty() && !archive.open(o.archive)) return 1;
     const bool sbs = !o.basestation.empty();
     if (sbs && basestation_init(o.basestation.c_str()) < 0) return 1;
+    LiveWeb::Server web;
+    const bool webOn = o.webPort > 0;
+    if (webOn && !web.start(o.webPort, o.channels, o.stationId)) return 1;
     // Fixes named in ACARS text are a last-resort position, as in
     // iridium-sniffer. Without the list that fallback is simply off.
     if (o.waypoints != "none") {
@@ -785,6 +797,22 @@ int main(int argc, char** argv) {
                        t - it->second.t < 60);
             if (newPos) nPos++;
             lastPos[aircraft] = {plat, plon, t};
+        }
+
+        // the live page
+        if (webOn) {
+            web.frame(t, f.frequency, f.snr, f.source, f.sourceKind, f.dest, f.destKind);
+            const bool acSide = f.sourceKind == 1 || f.destKind == 1;
+            const uint32_t aircraft = fromAircraft ? f.source : f.dest, station = fromAircraft ? f.dest : f.source;
+            if (ac && acSide)
+                web.acars(t, f.frequency, aircraft, station, fromAircraft, trimPad(ac->registration, '.'),
+                          trimPad(ac->flight, ' '), label, text);
+            if (xid && f.sourceKind == 1 && (f.destKind == 4 || f.destKind == 5)) {
+                const auto* l = xid->aircraftLocation ? &*xid->aircraftLocation : nullptr;
+                web.xid(t, f.source, f.dest, xid->type, xid->destinationAirport, xid->alternateStations,
+                        l != nullptr, l ? l->lat : 0, l ? l->lon : 0, l && l->altFt ? *l->altFt : -1);
+            }
+            if (newPos && acSide) web.position(t, aircraft, station, plat, plon, psrc);
         }
 
         // BaseStation (SBS): what the aircraft reported, under its ICAO
@@ -1041,10 +1069,16 @@ int main(int argc, char** argv) {
             stats[i].bursts += b - stats[i].lastBursts;
             stats[i].lastBursts = b;
         }
+        if (webOn) {
+            std::vector<uint64_t> wb, wf;
+            for (auto& st : stats) { wb.push_back(st.bursts); wf.push_back(st.frames); }
+            web.channels(wb, wf);
+        }
     }
     flushMinute();
 
     if (sbs) basestation_destroy();
+    if (webOn) web.stop();
     bool deviceFailed = false;
 #ifdef HAVE_RTLSDR
     if (live) {

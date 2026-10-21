@@ -106,7 +106,7 @@ MESSAGES_PAGE = r"""<!doctype html>
   .card .v small{font-size:13px;color:var(--dim);font-weight:400}
   .card.hot .v{color:var(--hot)}
   .grid{display:grid;grid-template-columns:300px 1fr;gap:14px;align-items:start}
-  @media(max-width:820px){.grid{grid-template-columns:1fr}}
+  @media(max-width:820px){.grid{grid-template-columns:minmax(0,1fr)}}
   .grid>*{min-width:0}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
     padding:14px 16px;margin-bottom:14px}

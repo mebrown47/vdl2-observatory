@@ -254,8 +254,8 @@ VDL2_PAGE = r"""<!doctype html>
   .card .v{font-size:26px;font-weight:600;margin-top:4px}
   .card .v small{font-size:13px;color:var(--dim);font-weight:400}
   .card.hot .v{color:var(--hot)}
-  .grid{display:grid;grid-template-columns:2fr 1fr;gap:14px}
-  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:14px}
+  @media(max-width:900px){.grid{grid-template-columns:minmax(0,1fr)}}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
     padding:14px 16px 6px;margin-bottom:14px;overflow-x:auto}
   .panel h2{font-size:13px;margin:0 0 10px;font-weight:600;color:var(--fg);
@@ -448,7 +448,7 @@ function stationMap(host,all,pos){
   const k=Math.cos((la0+la1)/2*Math.PI/180);
   const pad=Math.max(0.3,(la1-la0)*0.08,(lo1-lo0)*k*0.08);
   la0-=pad;la1+=pad;lo0-=pad/k;lo1+=pad/k;
-  const W=Math.max(320,host.clientWidth||900);
+  const W=Math.max(240,host.clientWidth||900);
   const H=Math.round(Math.max(280,Math.min(560,W*(la1-la0)/((lo1-lo0)*k))));
   const sc=Math.min(W/((lo1-lo0)*k),H/(la1-la0));
   const X=lo=>(lo-lo0)*k*sc+(W-(lo1-lo0)*k*sc)/2, Y=la=>(la1-la)*sc+(H-(la1-la0)*sc)/2;

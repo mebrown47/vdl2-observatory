@@ -57,6 +57,7 @@ Other rates and centres are mixed and resampled, so 2.5 MS/s from an Airspy R2 a
 | `--json [FILE]` | one dumpvdl2-style JSON object per frame (stdout by default); `--raw` adds the AVLC octets. XID frames use dumpvdl2's layout (`pub_params`, `vdl_params`), which feed parsers such as acars_router require; on the ten captures every frame passes acars_vdlm2_parser |
 | `--udp HOST:PORT` | the same JSON over UDP (acarshub, airframes) |
 | `--archive [DIR]` | `vdl2-YYYYMMDD.jsonl` for the Observatory (default `./archive`) |
+| `--web[=PORT]` | the live page, served by vdl2-sniffer itself on PORT (default 8889): no Python, no database |
 | `--basestation[=PORT]` | BaseStation (SBS) `MSG,3` positions for tar1090, VRS and the like: a server on PORT (default 30003) that tools connect to, or `--basestation=HOST:PORT` to push to one (reconnects by itself) |
 | `--basestation-fix` | also send positions taken from a named fix (off by default: the aircraft may be well past it) |
 | `--waypoints FILE` | fix list for positions from ACARS text (default: the installed `waypoints.csv`; `none` turns the fallback off) |
@@ -71,6 +72,19 @@ Without `--json` on stdout, it prints a line per frame:
 That is the time, the channel, the signal level, the sender and receiver (`GS` marks a ground
 station), and the frame: ACARS with tail, flight, label and text, an XID, or a control frame such as
 `RR`. At exit it prints bursts, frames and ACARS blocks per channel to stderr.
+
+## The live page
+
+`--web` serves a page from vdl2-sniffer itself, with nothing else to install: the frames it is
+hearing now, seconds behind the air. It shows:
+
+- aircraft and stations on a map, each aircraft with its track and a line to the station it is
+  talking to;
+- the newest messages, the aircraft heard in the last 30 minutes, handoffs, and per-channel counts.
+
+Station positions are estimated as the Observatory does it, from the positions reported since the
+receiver started. The state lives in memory, so it starts empty after a restart; for history, use the
+Observatory. `GET /api/state` returns the same state as JSON.
 
 ## The Observatory
 
