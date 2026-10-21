@@ -54,7 +54,7 @@ Other rates and centres are mixed and resampled, so 2.5 MS/s from an Airspy R2 a
 | `-s HZ`, `-c HZ` | input rate (default 1050000) and centre (default: the plan's centre) |
 | `--plan us\|eu`, `--channels LIST` | channel plan, or channels in MHz or Hz |
 | `--start TIME` | capture start for a file: epoch, `YYYY-MM-DD HH:MM:SS` local, or `...Z` UTC. Default: the file's mtime minus its length |
-| `--json [FILE]` | one dumpvdl2-style JSON object per frame (stdout by default); `--raw` adds the AVLC octets |
+| `--json [FILE]` | one dumpvdl2-style JSON object per frame (stdout by default); `--raw` adds the AVLC octets. XID frames use dumpvdl2's layout (`pub_params`, `vdl_params`), which feed parsers such as acars_router require; on the ten captures every frame passes acars_vdlm2_parser |
 | `--udp HOST:PORT` | the same JSON over UDP (acarshub, airframes) |
 | `--archive [DIR]` | `vdl2-YYYYMMDD.jsonl` for the Observatory (default `./archive`) |
 | `--waypoints FILE` | fix list for positions from ACARS text (default: the installed `waypoints.csv`; `none` turns the fallback off) |

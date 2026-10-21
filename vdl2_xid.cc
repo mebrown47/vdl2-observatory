@@ -52,7 +52,7 @@ void Vdl(Xid& x, const Param& p) {
     const auto& v = p.value;
     switch (p.id) {
         case 0x00:   // parameter set identifier, "V"
-            if (v.size() == 1 && v[0] == 'V') return;
+            if (v.size() == 1 && v[0] == 'V') { x.vdlParameterSet = true; return; }
             break;
         case 0x01:   // connection management
             if (v.size() == 1) { x.connectionManagement = v[0]; return; }
@@ -79,6 +79,7 @@ void Vdl(Xid& x, const Param& p) {
                 l.lon = Signed12(((v[1] & 0x0F) << 8) | v[2]) / 10.0;
                 // A handoff response was seen with 0xc0 here: 192,000 ft.
                 if (v[3] <= 60) l.altFt = v[3] * 1000;
+                l.altRawFt = v[3] * 1000;
                 if (l.lat >= -90 && l.lat <= 90 && l.lon >= -180 && l.lon <= 180) {
                     x.aircraftLocation = l;
                     return;
@@ -177,6 +178,53 @@ std::string ToJson(const Xid& x) {
         j += "]";
     }
     return j + "}";
+}
+
+std::string ToDumpvdl2Json(const Xid& x) {
+    const bool ho = x.type == "Handoff Initiation" || x.type == "Handoff Response";
+    const std::string type = !ho ? "" : x.type == "Handoff Initiation" ? "XID_CMD_HO" : "XID_RSP_HO";
+    std::string j = "{\"err\":false,\"type\":" + Quote(type) + ",\"type_descr\":" + Quote(x.type);
+    char b[96];
+    auto ints = [&](const std::vector<std::uint8_t>& v) {
+        std::string s = "[";
+        for (std::size_t i = 0; i < v.size(); ++i) s += (i ? "," : "") + std::to_string(v[i]);
+        return s + "]";
+    };
+    std::vector<std::string> pub, vdl;
+    auto param = [](const char* name, const std::string& value) {
+        return std::string("{\"name\":\"") + name + "\",\"value\":" + value + "}";
+    };
+    if (!x.parameterSet.empty()) pub.push_back(param("param_set_id", Quote(x.parameterSet)));
+    if (!x.procedureClasses.empty()) pub.push_back(param("procedure_classes", ints(x.procedureClasses)));
+    if (!x.hdlcOptions.empty()) pub.push_back(param("hdlc_options", ints(x.hdlcOptions)));
+    if (x.vdlParameterSet) vdl.push_back(param("param_set_id", "\"V\""));
+    if (x.connectionManagement) vdl.push_back(param("conn_mgmt", std::to_string(*x.connectionManagement)));
+    if (x.sequence) {
+        snprintf(b, sizeof b, "{\"seq\":%d,\"retry\":%d}", *x.sequence, *x.retry);
+        vdl.push_back(param("xid_sequencing", b));
+    }
+    if (x.avlcOptions) vdl.push_back(param("avlc_specific_options", "[" + std::to_string(*x.avlcOptions) + "]"));
+    if (!x.destinationAirport.empty()) vdl.push_back(param("dst_airport", Quote(x.destinationAirport)));
+    if (x.aircraftLocation) {
+        snprintf(b, sizeof b, "{\"loc\":{\"lat\":%.1f,\"lon\":%.1f},\"alt\":%d}",
+                 x.aircraftLocation->lat, x.aircraftLocation->lon, x.aircraftLocation->altRawFt);
+        vdl.push_back(param("ac_location", b));
+    }
+    if (!x.alternateStations.empty()) {
+        std::string s = "[";
+        for (std::size_t i = 0; i < x.alternateStations.size(); ++i) {
+            snprintf(b, sizeof b, "%s\"%06X\"", i ? "," : "", x.alternateStations[i]);
+            s += b;
+        }
+        vdl.push_back(param("alternate_ground_stations", s + "]"));
+    }
+    auto list = [](const std::vector<std::string>& v) {
+        std::string s = "[";
+        for (std::size_t i = 0; i < v.size(); ++i) s += (i ? "," : "") + v[i];
+        return s + "]";
+    };
+    if (!pub.empty()) j += ",\"pub_params\":" + list(pub);
+    return j + ",\"vdl_params\":" + list(vdl) + "}";
 }
 
 }  // namespace Vdl2Xid

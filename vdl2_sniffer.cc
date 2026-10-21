@@ -827,7 +827,7 @@ int main(int argc, char** argv) {
                     j += ",\"msg_text\":" + jsonQuote(ac->text) + "}";
                 }
             }
-            if (xid) j += ",\"xid\":" + Vdl2Xid::ToJson(*xid);
+            if (xid) j += ",\"xid\":" + Vdl2Xid::ToDumpvdl2Json(*xid);
             if (psrc) {
                 snprintf(b, sizeof b, ",\"ac_pos\":{\"lat\":%.4f,\"lon\":%.4f,\"src\":\"%s\"}", plat, plon, psrc);
                 j += b;

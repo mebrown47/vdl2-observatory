@@ -36,6 +36,7 @@ struct Param {
 struct Location {
     double lat = 0, lon = 0;       // degrees, 0.1 resolution
     std::optional<int> altFt;      // absent when the octet is implausible
+    int altRawFt = 0;              // the octet times 1000 ft, as sent
 };
 
 struct Xid {
@@ -48,6 +49,7 @@ struct Xid {
     std::vector<std::uint8_t> procedureClasses, hdlcOptions;
 
     // VDL parameters
+    bool vdlParameterSet = false;  // the "V" parameter set identifier was present
     std::optional<int> connectionManagement, avlcOptions;
     std::optional<int> sequence, retry;
     std::string destinationAirport;
@@ -64,8 +66,14 @@ struct Xid {
 std::optional<Xid> Parse(const std::uint8_t* info, std::size_t length,
                          bool response, bool poll, int sourceKind);
 
-// The parsed frame as a JSON object, for the live output and the archive.
+// The parsed frame as a JSON object, for the archive.
 std::string ToJson(const Xid& x);
+
+// The same frame in dumpvdl2's layout, for the live JSON and feeds:
+// err, type, type_descr, then pub_params and vdl_params as name/value
+// lists. Feed parsers (acars_router, acarshub) need this shape; a frame
+// in any other is rejected. Unnamed kinds get an empty type.
+std::string ToDumpvdl2Json(const Xid& x);
 
 }  // namespace Vdl2Xid
 
