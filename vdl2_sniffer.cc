@@ -5,8 +5,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * IQ in (file or stdin), AVLC frames out: dumpvdl2-style JSON for feeds,
- * and a JSONL archive that observatory/rollup.py reads. The receiver is CyberEther's clean-room VDL2 decoder
- * (third_party/vdl2, MIT), one instance per channel, each on its own
+ * and a JSONL archive that observatory/rollup.py reads. The receiver is
+ * our clean-room VDL2 decoder, written for CyberEther (third_party/vdl2, MIT), one instance per channel, each on its own
  * thread per block: the receiver's cost is per channel.
  *
  * The receiver wants 1.05 MS/s around a centre 12.5 kHz-aligned with the

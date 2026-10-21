@@ -1,9 +1,11 @@
 # VDL Mode 2 receiver (vendored)
 
-From CyberEther (Luigi F. Cruz, MIT; `LICENSE`), `src/domains/dsp/vdl2/` at commit `9905d4fe`:
-`vdl2_decoder`, `vdl2_rs`, `vdl2_acars`. A clean-room implementation written from ETSI EN 301
-841-1 and measurements on the air, with dumpvdl2 used only as a black-box oracle. Copied
-from iridium-analyzer's `third_party/vdl2`, which carries the first two changes below.
+Mike Brown's clean-room VDL2 decoder, built to be upstreamed to CyberEther and carrying
+CyberEther's MIT licence (`LICENSE`). Taken from `src/domains/dsp/vdl2/` on the
+`feat/vdl2-block` branch of github.com/mebrown47/CyberEther at commit `9905d4fe`:
+`vdl2_decoder`, `vdl2_rs`, `vdl2_acars`. Written from ETSI EN 301 841-1 and measurements on
+the air, with dumpvdl2 used only as a black-box oracle. Copied from iridium-analyzer's
+`third_party/vdl2`, which carries the first two changes below.
 
 Changes marked `(iridium-analyzer)` in the source:
 - `vdl2_acars.cc` does not include CyberEther's `jetstream/config.hh`; the build defines

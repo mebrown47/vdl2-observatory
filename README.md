@@ -6,8 +6,8 @@ eight US channels between 136.650 and 136.975 MHz fit in 1.05 MHz. Output goes t
 - a line per frame in the terminal
 - a JSONL archive, which the VDL2 Observatory dashboard reads
 
-The receiver is CyberEther's clean-room VDL2 decoder (`third_party/vdl2`, MIT). It was written
-from ETSI EN 301 841-1 and measurements on the air, with dumpvdl2 used only as a black-box oracle.
+The receiver is Mike Brown's clean-room VDL2 decoder (`third_party/vdl2`, MIT), built to be
+upstreamed to CyberEther. It was written from ETSI EN 301 841-1 and measurements on the air, with dumpvdl2 used only as a black-box oracle.
 On ten recorded captures it decoded 357 frames to dumpvdl2's 250, and every frame dumpvdl2 decoded
 was among them.
 
@@ -154,7 +154,7 @@ dashboard estimates each station's position instead, from the positions of aircr
 
 ## Licence
 
-GPL-3.0-or-later (`LICENSE`). The decoder in `third_party/vdl2` is MIT (CyberEther, Luigi F.
-Cruz). `acars_position.c` and `waypoint_db.c` come from iridium-sniffer. The fix list combines
+GPL-3.0-or-later (`LICENSE`). The decoder in `third_party/vdl2` is Mike Brown's, under the MIT
+licence of CyberEther, the project it is written for. `acars_position.c` and `waypoint_db.c` come from iridium-sniffer. The fix list combines
 X-Plane's `earth_fix.dat` (GPL-3.0), Global Aviation Waypoints (MIT) and the FAA's fix data
 (public domain).
