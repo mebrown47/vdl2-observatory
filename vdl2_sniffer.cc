@@ -763,6 +763,17 @@ int main(int argc, char** argv) {
             const int src = acars_aircraft_position(label.c_str(), text.c_str(), fromAircraft, &plat, &plon);
             psrc = src == ACARS_POS_TEXT ? "text" : src == ACARS_POS_FIX ? "fix" : nullptr;
         }
+        // Counted (and archived) once: the same spot again within a minute
+        // is a repeat.
+        bool newPos = false;
+        if (psrc) {
+            const uint32_t aircraft = fromAircraft ? f.source : f.dest;
+            auto it = lastPos.find(aircraft);
+            newPos = !(it != lastPos.end() && it->second.lat == plat && it->second.lon == plon &&
+                       t - it->second.t < 60);
+            if (newPos) nPos++;
+            lastPos[aircraft] = {plat, plon, t};
+        }
 
         // dumpvdl2-style JSON
         if (jsonOut || !o.udp.empty()) {
@@ -845,21 +856,12 @@ int main(int argc, char** argv) {
             // A position from ACARS text, logged per frame: a multi-block
             // message whose later blocks never arrive is never logged whole,
             // but its first block's position is still good.
-            if (psrc) {
-                const uint32_t aircraft = fromAircraft ? f.source : f.dest;
-                const uint32_t station = fromAircraft ? f.dest : f.source;
-                auto it = lastPos.find(aircraft);
-                const bool repeat = it != lastPos.end() && it->second.lat == plat &&
-                                    it->second.lon == plon && t - it->second.t < 60;
-                if (!repeat) {
-                    snprintf(b, sizeof b, "{\"e\":\"vpos\",\"t\":%llu,\"icao\":\"%s\",\"gs\":\"%s\","
-                             "\"lat\":%.4f,\"lon\":%.4f,\"src\":\"%s\"}",
-                             (unsigned long long)tMs, hex6(aircraft).c_str(), hex6(station).c_str(),
-                             plat, plon, psrc);
-                    archive.write(tMs, b);
-                    nPos++;
-                }
-                lastPos[aircraft] = {plat, plon, t};
+            if (newPos) {
+                snprintf(b, sizeof b, "{\"e\":\"vpos\",\"t\":%llu,\"icao\":\"%s\",\"gs\":\"%s\","
+                         "\"lat\":%.4f,\"lon\":%.4f,\"src\":\"%s\"}",
+                         (unsigned long long)tMs, hex6(fromAircraft ? f.source : f.dest).c_str(),
+                         hex6(fromAircraft ? f.dest : f.source).c_str(), plat, plon, psrc);
+                archive.write(tMs, b);
             }
             if (xid) {
                 snprintf(b, sizeof b, "{\"e\":\"xid\",\"t\":%llu,\"freq\":%.0f,\"src\":\"%s\",\"sk\":%d,"
