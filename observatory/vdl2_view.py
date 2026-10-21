@@ -1,0 +1,569 @@
+# Copyright (c) 2026 Mike Brown
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""
+The Overview page: GET / and GET /api/vdl2[?hours=N].
+
+Reads the vdl2_* tables rollup.py builds from vdl2-sniffer's archive.
+Read-only, stdlib only, like server.py.
+"""
+
+import math
+import os
+import sqlite3
+import time
+
+CHANNEL_COLORS = ["#4aa8ff", "#3fb950", "#f778ba", "#d29922", "#a371f7",
+                  "#79c0ff", "#ff7b72", "#e3b341", "#56d364", "#bc8cff"]
+
+
+def _percentiles(bins, ps=(10, 50, 90)):
+    """SNR percentiles from {bin_floor: count} (2 dB bins): each percentile
+    reports its bin's middle, so it is good to +-1 dB."""
+    total = sum(bins.values())
+    if not total:
+        return [None] * len(ps)
+    out, acc, keys = [], 0, sorted(bins)
+    targets = [total * p / 100 for p in ps]
+    i = 0
+    for k in keys:
+        acc += bins[k]
+        while i < len(targets) and acc >= targets[i]:
+            out.append(k + 1)
+            i += 1
+    while len(out) < len(ps):
+        out.append(keys[-1] + 1)
+    return out
+
+
+# Ground stations are almost never heard directly: they sit low and far off,
+# and no capture so far holds a single ground-station transmission. Their
+# positions are estimated from aircraft positions (vdl2_pos: XID reports,
+# coordinates and named fixes in ACARS text, ADS-C): the station an aircraft
+# is talking to is one whose coverage it is in, and every station in an XID
+# alternate list is one it can hear. Each station's estimate is the weighted
+# centre of those positions; a named fix counts half, since the aircraft may
+# be well past it.
+#
+# It is the centre of where aircraft were, not a fix: a receiver only hears
+# aircraft within a few hundred km of itself, so a distant station is seen
+# from the receiver's side only and its estimate is pulled towards the
+# receiver. Stations near the receiver come out best. Repeated reports of
+# one spot add nothing, so a station needs MIN_POSITIONS different
+# positions before it gets an estimate.
+MIN_POSITIONS = 3
+SOURCE_WEIGHT = {"xid": 1.0, "text": 1.0, "adsc": 1.0, "fix": 0.5}
+HEARD_WEIGHT = 0.5
+EARTH_KM = 6371.0
+
+
+def estimate_stations(con):
+    """[{station, lat, lon, spread_km, n_target, n_heard, n_pos}] from every
+    XID position on record (all time: stations do not move). lat, lon and
+    spread_km are None below MIN_POSITIONS different positions."""
+    samples = {}
+    have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "vdl2_pos" in have:
+        for gs, lat, lon, src in con.execute("SELECT gs,lat,lon,src FROM vdl2_pos"):
+            samples.setdefault(gs, []).append((lat, lon, SOURCE_WEIGHT.get(src, 0.5), 1))
+    for gs, lat, lon, alt_gs in con.execute(
+            "SELECT gs,lat,lon,alt_gs FROM vdl2_xid WHERE lat IS NOT NULL"):
+        for other in (alt_gs or "").split():
+            if other != gs:
+                samples.setdefault(other, []).append((lat, lon, HEARD_WEIGHT, 0))
+    out = []
+    for st, pts in samples.items():
+        # mean of unit vectors: right across the dateline and near the poles
+        x = y = z = w = 0.0
+        for lat, lon, wt, _ in pts:
+            la, lo = math.radians(lat), math.radians(lon)
+            x += wt * math.cos(la) * math.cos(lo)
+            y += wt * math.cos(la) * math.sin(lo)
+            z += wt * math.sin(la)
+            w += wt
+        lat0 = math.degrees(math.atan2(z, math.hypot(x, y)))
+        lon0 = math.degrees(math.atan2(y, x))
+        sq = 0.0
+        for lat, lon, wt, _ in pts:
+            sq += wt * _km(lat0, lon0, lat, lon) ** 2
+        n_pos = len({(lat, lon) for lat, lon, *_ in pts})
+        ok = n_pos >= MIN_POSITIONS
+        out.append({"station": st,
+                    "lat": round(lat0, 3) if ok else None,
+                    "lon": round(lon0, 3) if ok else None,
+                    "spread_km": round(math.sqrt(sq / w)) if ok else None,
+                    "n_target": sum(t for *_, t in pts),
+                    "n_heard": sum(1 - t for *_, t in pts),
+                    "n_pos": n_pos})
+    out.sort(key=lambda r: (r["lat"] is None, -r["n_pos"]))
+    return out
+
+
+def _km(lat1, lon1, lat2, lon2):
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * EARTH_KM * math.asin(min(1.0, math.sqrt(a)))
+
+
+def build_vdl2(path, hours=None):
+    if not os.path.exists(path):
+        return {"error": "no database yet — run rollup.py first"}
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+    con.row_factory = sqlite3.Row
+    try:
+        have = {r["name"] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if "vdl2_channel_hourly" not in have:
+            return {"error": "database predates VDL2 (schema 4) — run "
+                             "rollup.py once to add the tables"}
+
+        def rows(sql, *a):
+            return con.execute(sql, a).fetchall()
+
+        span = rows("SELECT MIN(hour) a, MAX(hour) b FROM vdl2_channel_hourly")[0]
+        hmin, hmax = span["a"], span["b"]
+        if hmin is None:
+            return {"error": "no VDL2 data yet — run vdl2-sniffer with "
+                             "--archive into the archive directory"}
+        hours = int(hours) if hours else 0
+        floor = max(hmin, hmax - (hours - 1) * 3600) if hours > 0 else hmin
+
+        channels = {}
+        for r in rows("SELECT freq,SUM(bursts) b,SUM(frames) f FROM "
+                      "vdl2_channel_hourly WHERE hour>=? GROUP BY freq", floor):
+            channels[r["freq"]] = {"freq": r["freq"], "bursts": r["b"],
+                                   "frames": r["f"]}
+        bins = {}
+        for r in rows("SELECT freq,bin,SUM(count) c FROM vdl2_snr_hourly "
+                      "WHERE hour>=? GROUP BY freq,bin", floor):
+            bins.setdefault(r["freq"], {})[r["bin"]] = r["c"]
+        for f, c in channels.items():
+            c["snr_p10"], c["snr_p50"], c["snr_p90"] = _percentiles(bins.get(f, {}))
+        chan_list = [channels[f] for f in sorted(channels)]
+
+        hourly = {}
+        for r in rows("SELECT hour,freq,frames FROM vdl2_channel_hourly "
+                      "WHERE hour>=? ORDER BY hour", floor):
+            h = hourly.setdefault(r["hour"], {"hour": r["hour"], "ch": {},
+                                              "aircraft": 0, "acars": 0,
+                                              "cpdlc": 0, "adsc": 0})
+            h["ch"][str(r["freq"])] = r["frames"]
+        for r in rows("SELECT hour,COUNT(*) n FROM vdl2_aircraft_hourly "
+                      "WHERE hour>=? GROUP BY hour", floor):
+            if r["hour"] in hourly:
+                hourly[r["hour"]]["aircraft"] = r["n"]
+        for r in rows("SELECT hour,service,SUM(count) c FROM vdl2_msg_hourly "
+                      "WHERE hour>=? GROUP BY hour,service", floor):
+            if r["hour"] in hourly:
+                hourly[r["hour"]][r["service"]] = r["c"]
+        hour_list = [hourly[k] for k in sorted(hourly)]
+
+        stations = [dict(r) for r in rows(
+            "SELECT station,SUM(count) count,MAX(hour) last FROM "
+            "vdl2_station_hourly WHERE hour>=? GROUP BY station "
+            "ORDER BY count DESC LIMIT 20", floor)]
+        aircraft = [dict(r) for r in rows(
+            "SELECT icao,SUM(count) count,MAX(best_snr) best_snr,MAX(hour) last "
+            "FROM vdl2_aircraft_hourly WHERE hour>=? GROUP BY icao "
+            "ORDER BY count DESC LIMIT 40", floor)]
+
+        xids, station_est, positions, pos_src = [], [], [], {}
+        if "vdl2_xid" in have:
+            station_est = estimate_stations(con)
+            xids = [dict(r) for r in rows(
+                "SELECT t,icao,gs,from_gs,kind,airport,lat,lon,alt FROM vdl2_xid "
+                "WHERE t>=? ORDER BY t DESC LIMIT 60", floor)]
+        if "vdl2_pos" in have:
+            positions = [dict(r) for r in rows(
+                "SELECT icao,gs,lat,lon,src FROM vdl2_pos ORDER BY t DESC LIMIT 500")]
+            pos_src = {r["src"]: r["n"] for r in rows(
+                "SELECT src,COUNT(*) n FROM vdl2_pos WHERE t>=? GROUP BY src", floor)}
+
+        n_ac = rows("SELECT COUNT(DISTINCT icao) n FROM vdl2_aircraft_hourly "
+                    "WHERE hour>=?", floor)[0]["n"]
+        n_gs = rows("SELECT COUNT(DISTINCT station) n FROM vdl2_station_hourly "
+                    "WHERE hour>=?", floor)[0]["n"]
+        msg = {r["service"]: r["c"] for r in rows(
+            "SELECT service,SUM(count) c FROM vdl2_msg_hourly WHERE hour>=? "
+            "GROUP BY service", floor)}
+        meta = {r[0]: r[1] for r in con.execute("SELECT key,value FROM meta")}
+
+        return {
+            "meta": {"generated": int(time.time()),
+                     "last_run": int(meta.get("last_run", 0))},
+            "span": {"start": floor, "end": hmax,
+                     "hours": (hmax - floor) // 3600 + 1},
+            "totals": {
+                "bursts": sum(c["bursts"] for c in chan_list),
+                "frames": sum(c["frames"] for c in chan_list),
+                "aircraft": n_ac, "stations": n_gs,
+                "messages": {s: msg.get(s, 0) for s in ("acars", "cpdlc", "adsc")},
+            },
+            "channels": chan_list,
+            "hours": hour_list,
+            "stations": stations,
+            "aircraft": aircraft,
+            "xid": xids,
+            "station_est": station_est,
+            "positions": positions,
+            "pos_sources": pos_src,
+        }
+    finally:
+        con.close()
+
+
+VDL2_PAGE = r"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VDL2 Observatory</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2b333d;
+    --fg:#e6edf3; --dim:#8b98a5; --accent:#4aa8ff; --good:#3fb950;
+    --warn:#d29922; --hot:#f778ba; --grid:#242c36;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+    padding:16px 22px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{font-size:18px;margin:0;font-weight:650;letter-spacing:.2px}
+  header .sub{color:var(--dim);font-size:12.5px}
+  header .spacer{flex:1}
+  .nav{display:flex;gap:4px}
+  .nav a{color:var(--dim);text-decoration:none;font-size:13px;padding:4px 11px;
+    border-radius:6px;border:1px solid transparent}
+  .nav a:hover{color:var(--fg)}
+  .nav a.on{color:var(--fg);background:var(--panel2);border-color:var(--line)}
+  header .status{color:var(--dim);font-size:12px}
+  header .dot{display:inline-block;width:8px;height:8px;border-radius:50%;
+    background:var(--good);margin-right:5px;vertical-align:middle}
+  .controls{display:flex;gap:6px}
+  .controls button{background:var(--panel2);color:var(--dim);border:1px solid
+    var(--line);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px}
+  .controls button.on{color:var(--fg);border-color:var(--accent);
+    background:#182634}
+  main{padding:18px 22px;max-width:1400px;margin:0 auto}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:12px;margin-bottom:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:14px 16px}
+  .card .k{color:var(--dim);font-size:11.5px;text-transform:uppercase;
+    letter-spacing:.6px}
+  .card .v{font-size:26px;font-weight:600;margin-top:4px}
+  .card .v small{font-size:13px;color:var(--dim);font-weight:400}
+  .card.hot .v{color:var(--hot)}
+  .grid{display:grid;grid-template-columns:2fr 1fr;gap:14px}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:14px 16px 6px;margin-bottom:14px;overflow-x:auto}
+  .panel h2{font-size:13px;margin:0 0 10px;font-weight:600;color:var(--fg);
+    display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .panel h2 .hint{color:var(--dim);font-weight:400;font-size:11.5px}
+  .legend{display:flex;flex-wrap:wrap;gap:10px;margin:6px 0 2px;font-size:11.5px;
+    color:var(--dim)}
+  .legend span{display:inline-flex;align-items:center;gap:5px}
+  .legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+  svg{display:block;width:100%;overflow:visible}
+  .ax{fill:var(--dim);font-size:10.5px}
+  .gl{stroke:var(--grid);stroke-width:1}
+  .empty{color:var(--dim);padding:30px;text-align:center;font-size:13px}
+  .bar:hover{opacity:.82}
+  .mapax{fill:var(--dim);font-size:24px}
+  .maplbl{fill:var(--fg);font-size:28px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:8px}
+  th{color:var(--dim);font-weight:500;text-align:right;padding:4px 8px;
+    border-bottom:1px solid var(--line);white-space:nowrap}
+  td{text-align:right;padding:4px 8px;border-bottom:1px solid var(--grid);
+    font-variant-numeric:tabular-nums;white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  a{color:var(--accent)}
+</style></head>
+<body>
+<header>
+  <h1>VDL2 Observatory</h1>
+  <nav class="nav"><a href="/" class="on">Overview</a><a href="/messages">Messages</a></nav>
+  <span class="sub">VHF data link, 136.650–136.975 MHz</span>
+  <span class="spacer"></span>
+  <div class="controls" id="win">
+    <button data-h="6">6h</button>
+    <button data-h="24" class="on">24h</button>
+    <button data-h="72">3d</button>
+    <button data-h="168">7d</button>
+    <button data-h="0">all</button>
+  </div>
+  <span class="status" id="status"><span class="dot"></span>loading…</span>
+</header>
+<main>
+  <div class="cards" id="cards"></div>
+  <div class="panel">
+    <h2>Frames per hour <span class="hint">by channel</span></h2>
+    <div class="legend" id="ch-legend"></div>
+    <div id="frames"></div>
+  </div>
+  <div class="grid">
+    <div>
+      <div class="panel">
+        <h2>Channels <span class="hint">decoder health in window: frames per detected burst, SNR percentiles</span></h2>
+        <div id="chans"></div>
+      </div>
+      <div class="panel">
+        <h2>Messages per hour <span class="hint">ACARS and what libacars found inside</span></h2>
+        <div class="legend" id="svc-legend"></div>
+        <div id="svc"></div>
+      </div>
+      <div class="panel">
+        <h2>Handoffs and positions <span class="hint">XID frames: the station an aircraft moves to, and where it said it was</span></h2>
+        <div id="xid"></div>
+      </div>
+      <div class="panel">
+        <h2>Aircraft per hour <span class="hint">distinct ICAO addresses heard or addressed</span></h2>
+        <div id="achours"></div>
+      </div>
+    </div>
+    <div>
+      <div class="panel">
+        <h2>Station map <span class="hint">centre of the positions of aircraft talking to or hearing each station, all time; biased towards this receiver for distant stations</span></h2>
+        <div id="stmap"></div>
+      </div>
+      <div class="panel">
+        <h2>Ground stations <span class="hint">frames to or from, in window</span></h2>
+        <div id="stations"></div>
+      </div>
+      <div class="panel">
+        <h2>Aircraft <span class="hint">most frames in window</span></h2>
+        <div id="aircraft"></div>
+      </div>
+    </div>
+  </div>
+  <p style="color:var(--dim);font-size:11.5px;margin:6px 2px 30px">
+    Times UTC. Aggregated hourly by rollup.py from vdl2-sniffer's archive.
+    A burst is anything the energy detector opened on; most of a quiet
+    channel's bursts are noise, so frames per burst is a trend, not a score.
+    <span id="freshness"></span>
+  </p>
+</main>
+<script>
+const NS="http://www.w3.org/2000/svg";
+const CH_COLORS=""" + repr(CHANNEL_COLORS) + r""";
+const SVC_COLORS={acars:"#4aa8ff",cpdlc:"#f778ba",adsc:"#d29922"};
+let win=24;
+
+function el(tag,attrs,txt){const e=document.createElementNS(NS,tag);
+  for(const k in attrs)e.setAttribute(k,attrs[k]);
+  if(txt!=null)e.textContent=txt;return e;}
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,
+  c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+function fmt(n){if(n>=1e6)return (n/1e6).toFixed(n<1e7?1:0)+"M";
+  if(n>=1e3)return (n/1e3).toFixed(n<1e4?1:0)+"k";return ""+n;}
+function mhz(f){return (f/1e6).toFixed(3);}
+function hourLabel(h){const d=new Date(h*1000);
+  return String(d.getUTCHours()).padStart(2,"0")+":00";}
+function dayLabel(h){const d=new Date(h*1000);
+  return (d.getUTCMonth()+1)+"/"+d.getUTCDate();}
+function ago(sec){const s=Math.max(0,Math.floor(Date.now()/1000)-sec);
+  if(s<90)return s+"s ago";if(s<5400)return Math.round(s/60)+"m ago";
+  if(s<172800)return Math.round(s/3600)+"h ago";return Math.round(s/86400)+"d ago";}
+function svg(host,h){host.innerHTML="";const s=el("svg",
+  {viewBox:"0 0 1000 "+h,preserveAspectRatio:"none",height:h});
+  host.appendChild(s);return s;}
+function emptyMsg(host,t){host.innerHTML='<div class="empty">'+esc(t)+'</div>';}
+
+function stackedBars(host,rows,keys,colors){
+  if(!rows.length){emptyMsg(host,"no data in window");return;}
+  const W=1000,H=200,padL=44,padB=22,padT=8;
+  const s=svg(host,H);const iw=W-padL-6,ih=H-padB-padT;
+  let max=0;rows.forEach(r=>{let t=0;keys.forEach(k=>t+=(r.vals[k]||0));
+    if(t>max)max=t;});
+  max=max||1;
+  [0,.25,.5,.75,1].forEach(f=>{const y=padT+ih-ih*f;
+    s.appendChild(el("line",{x1:padL,y1:y,x2:W,y2:y,class:"gl"}));
+    s.appendChild(el("text",{x:padL-6,y:y+3,"text-anchor":"end",class:"ax"},
+      fmt(Math.round(max*f))));});
+  const bw=iw/rows.length, bar=Math.max(1,bw*0.82);
+  rows.forEach((r,i)=>{const x=padL+i*bw+(bw-bar)/2;let acc=0;
+    keys.forEach(k=>{const v=r.vals[k]||0;if(!v)return;
+      const hh=ih*v/max,y=padT+ih-acc-hh;acc+=hh;
+      const rc=el("rect",{x:x,y:y,width:bar,height:hh,fill:colors[k]||"#888",
+        class:"bar"});rc.appendChild(el("title",null,
+        r.label+" · "+k+": "+v));s.appendChild(rc);});
+    if(rows.length<=26||i%Math.ceil(rows.length/16)===0)
+      s.appendChild(el("text",{x:x+bar/2,y:H-6,"text-anchor":"middle",
+        class:"ax"},r.tick));});
+}
+function lineChart(host,rows,color){
+  if(!rows.length){emptyMsg(host,"no data in window");return;}
+  const W=1000,H=150,padL=44,padB=22,padT=8;
+  const s=svg(host,H);const iw=W-padL-6,ih=H-padB-padT;
+  let max=0;rows.forEach(r=>{if(r.v>max)max=r.v;});max=max||1;
+  [0,.5,1].forEach(f=>{const y=padT+ih-ih*f;
+    s.appendChild(el("line",{x1:padL,y1:y,x2:W,y2:y,class:"gl"}));
+    s.appendChild(el("text",{x:padL-6,y:y+3,"text-anchor":"end",class:"ax"},
+      fmt(Math.round(max*f))));});
+  const n=rows.length,step=n>1?iw/(n-1):0;
+  const X=i=>padL+(n>1?i*step:iw/2), Y=v=>padT+ih-ih*v/max;
+  let d="";rows.forEach((r,i)=>{d+=(i?"L":"M")+X(i).toFixed(1)+" "+Y(r.v).toFixed(1)+" ";});
+  s.appendChild(el("path",{d:d,fill:"none",stroke:color,"stroke-width":2}));
+  rows.forEach((r,i)=>{const c=el("circle",{cx:X(i),cy:Y(r.v),r:2.4,fill:color});
+    c.appendChild(el("title",null,r.label+": "+r.v));s.appendChild(c);
+    if(n<=26||i%Math.ceil(n/16)===0)
+      s.appendChild(el("text",{x:X(i),y:H-6,"text-anchor":"middle",class:"ax"},r.tick));});
+}
+function ll(lat,lon){return Math.abs(lat).toFixed(1)+(lat<0?'S ':'N ')+
+  Math.abs(lon).toFixed(1)+(lon<0?'W':'E');}
+// Stations (squares, with their spread as a ring) and the aircraft positions
+// behind them (dots, each tied to the station it handed off to). Equirectangular
+// around the data, scaled by the middle latitude; no tiles, so it works offline.
+function stationMap(host,all,pos){
+  const st=all.filter(x=>x.lat!=null);
+  if(!st.length){emptyMsg(host,all.length?"no station has "+3+" different aircraft positions yet":
+    "no aircraft position reports yet");return;}
+  // only the reports near an estimated station: one receiver's aircraft
+  // should not shrink another receiver's stations to a dot
+  const near=(p,x)=>Math.hypot(p.lat-x.lat,(p.lon-x.lon)*Math.cos(x.lat*Math.PI/180))*111<600;
+  pos=pos.filter(p=>st.some(x=>near(p,x)));
+  const pts=st.map(s=>[s.lat,s.lon]).concat(pos.map(p=>[p.lat,p.lon]));
+  let la0=Math.min(...pts.map(p=>p[0])),la1=Math.max(...pts.map(p=>p[0]));
+  let lo0=Math.min(...pts.map(p=>p[1])),lo1=Math.max(...pts.map(p=>p[1]));
+  const k=Math.cos((la0+la1)/2*Math.PI/180);
+  const pad=Math.max(0.5,(la1-la0)*0.12,(lo1-lo0)*k*0.12);
+  la0-=pad;la1+=pad;lo0-=pad/k;lo1+=pad/k;
+  const W=1000,H=Math.max(260,Math.min(620,W*(la1-la0)/((lo1-lo0)*k)));
+  const sc=Math.min(W/((lo1-lo0)*k),H/(la1-la0));
+  const X=lo=>(lo-lo0)*k*sc+(W-(lo1-lo0)*k*sc)/2, Y=la=>(la1-la)*sc+(H-(la1-la0)*sc)/2;
+  host.innerHTML="";const s=el("svg",{viewBox:"0 0 "+W+" "+H});host.appendChild(s);
+  s.appendChild(el("rect",{x:0,y:0,width:W,height:H,fill:"none",stroke:"var(--line)"}));
+  for(let g=Math.ceil(lo0);g<=lo1;g++){if(g%2)continue;
+    s.appendChild(el("line",{x1:X(g),y1:0,x2:X(g),y2:H,class:"gl"}));
+    s.appendChild(el("text",{x:X(g)+6,y:H-10,class:"mapax"},Math.abs(g)+(g<0?"W":"E")));}
+  for(let g=Math.ceil(la0);g<=la1;g++){if(g%2)continue;
+    s.appendChild(el("line",{x1:0,y1:Y(g),x2:W,y2:Y(g),class:"gl"}));
+    s.appendChild(el("text",{x:8,y:Y(g)-8,class:"mapax"},Math.abs(g)+(g<0?"S":"N")));}
+  const at={};st.forEach(x=>at[x.station]=x);
+  pos.forEach(p=>{const t=at[p.gs];if(!t)return;
+    s.appendChild(el("line",{x1:X(p.lon),y1:Y(p.lat),x2:X(t.lon),y2:Y(t.lat),
+      stroke:"#2f6feb","stroke-opacity":.45,"stroke-width":3}));});
+  pos.forEach(p=>{const c=el("circle",{cx:X(p.lon),cy:Y(p.lat),r:8,fill:"#8b98a5"});
+    c.appendChild(el("title",null,p.icao+" → "+p.gs+" at "+ll(p.lat,p.lon)+" ("+p.src+")"));s.appendChild(c);});
+  st.forEach(x=>{const cx=X(x.lon),cy=Y(x.lat);
+    if(x.spread_km)s.appendChild(el("circle",{cx:cx,cy:cy,r:x.spread_km/111*sc,fill:"#4aa8ff",
+      "fill-opacity":.06,stroke:"#4aa8ff","stroke-opacity":.45,"stroke-width":3,"stroke-dasharray":"10 8"}));
+    const r=el("rect",{x:cx-12,y:cy-12,width:24,height:24,rx:4,fill:"#4aa8ff"});
+    r.appendChild(el("title",null,x.station+": "+ll(x.lat,x.lon)+", ±"+x.spread_km+" km from "+
+      x.n_pos+" positions ("+x.n_target+" from aircraft talking to it, "+x.n_heard+" from XID alternate lists)"));
+    s.appendChild(r);
+    s.appendChild(el("text",{x:cx+20,y:cy+10,class:"maplbl"},x.station+" ("+x.n_pos+")"));});
+}
+function card(k,v,sub,hot){return '<div class="card'+(hot?' hot':'')+
+  '"><div class="k">'+k+'</div><div class="v">'+v+
+  (sub?' <small>'+sub+'</small>':'')+'</div></div>';}
+function ticks(rows){
+  const span=rows.length?rows[rows.length-1].hour-rows[0].hour:0;
+  const byDay=span>36*3600;
+  rows.forEach(r=>r._tick=byDay?dayLabel(r.hour):hourLabel(r.hour));
+}
+
+async function load(){
+  const st=document.getElementById("status");
+  try{
+    const r=await fetch("/api/vdl2"+(win?("?hours="+win):""));
+    const d=await r.json();
+    if(d.error){document.getElementById("cards").innerHTML="";
+      emptyMsg(document.getElementById("frames"),d.error);
+      st.innerHTML='<span class="dot" style="background:var(--warn)"></span>'+esc(d.error);
+      return;}
+    render(d);
+    st.innerHTML='<span class="dot"></span>updated '+new Date().toLocaleTimeString();
+  }catch(e){st.innerHTML='<span class="dot" style="background:var(--warn)"></span>fetch failed';}
+}
+
+function render(d){
+  const t=d.totals,m=t.messages;
+  document.getElementById("cards").innerHTML=
+    card("Frames",fmt(t.frames),"from "+fmt(t.bursts)+" bursts")+
+    card("Aircraft",fmt(t.aircraft),"distinct ICAO")+
+    card("Ground stations",fmt(t.stations),null)+
+    card("ACARS msgs",fmt(m.acars),null)+
+    card("CPDLC",fmt(m.cpdlc),"clearances",true)+
+    card("ADS-C",fmt(m.adsc),"reports")+
+    card("Positions",fmt(Object.values(d.pos_sources||{}).reduce((a,b)=>a+b,0)),
+      ["text","fix","xid","adsc"].filter(k=>(d.pos_sources||{})[k]).map(k=>k+" "+d.pos_sources[k]).join(" · "))+
+    card("Span",d.span.hours+"h",dayLabel(d.span.start)+"–"+dayLabel(d.span.end));
+
+  const freqs=d.channels.map(c=>String(c.freq));
+  const colors={};freqs.forEach((f,i)=>colors[mhz(+f)]=CH_COLORS[i%CH_COLORS.length]);
+  const leg=document.getElementById("ch-legend");leg.innerHTML="";
+  freqs.forEach(f=>{const sp=document.createElement("span");
+    sp.innerHTML='<i style="background:'+colors[mhz(+f)]+'"></i>'+mhz(+f);leg.appendChild(sp);});
+  ticks(d.hours);
+  stackedBars(document.getElementById("frames"),d.hours.map(h=>{const vals={};
+    freqs.forEach(f=>vals[mhz(+f)]=h.ch[f]||0);
+    return {label:dayLabel(h.hour)+" "+hourLabel(h.hour),tick:h._tick,vals:vals};}),
+    freqs.map(f=>mhz(+f)),colors);
+
+  const ct=document.getElementById("chans");
+  if(!d.channels.length)emptyMsg(ct,"no channels");
+  else ct.innerHTML='<table><tr><th>Channel, MHz</th><th>Bursts</th><th>Frames</th>'+
+    '<th>Frames per burst</th><th>SNR p10</th><th>p50</th><th>p90, dB</th></tr>'+
+    d.channels.map(c=>'<tr><td class="mono">'+mhz(c.freq)+'</td><td>'+fmt(c.bursts)+
+      '</td><td>'+fmt(c.frames)+'</td><td>'+(c.bursts?(100*c.frames/c.bursts).toFixed(0)+'%':'–')+
+      '</td><td>'+(c.snr_p10??'–')+'</td><td>'+(c.snr_p50??'–')+'</td><td>'+(c.snr_p90??'–')+
+      '</td></tr>').join("")+'</table>';
+
+  const svcKeys=["acars","cpdlc","adsc"];
+  const sl=document.getElementById("svc-legend");sl.innerHTML="";
+  svcKeys.forEach(k=>{const sp=document.createElement("span");
+    sp.innerHTML='<i style="background:'+SVC_COLORS[k]+'"></i>'+k.toUpperCase();sl.appendChild(sp);});
+  stackedBars(document.getElementById("svc"),d.hours.map(h=>({label:hourLabel(h.hour),
+    tick:h._tick,vals:{acars:h.acars,cpdlc:h.cpdlc,adsc:h.adsc}})),svcKeys,SVC_COLORS);
+
+  lineChart(document.getElementById("achours"),d.hours.map(h=>({tick:h._tick,
+    label:hourLabel(h.hour),v:h.aircraft})),"#3fb950");
+
+  const est={};(d.station_est||[]).forEach(s=>est[s.station]=s);
+  const sh=document.getElementById("stations");
+  if(!d.stations.length)emptyMsg(sh,"no ground stations");
+  else{const top=d.stations[0].count||1;
+    sh.innerHTML='<table><tr><th>Station</th><th></th><th>Frames</th><th>Est. position</th><th>Last heard</th></tr>'+
+    d.stations.map(g=>{const e=est[g.station];
+      const pos=!e?'–':e.lat==null?'<span style="color:var(--dim)">too few reports ('+e.n_pos+')</span>':
+        ll(e.lat,e.lon)+' <span style="color:var(--dim)">±'+e.spread_km+' km, '+e.n_pos+' positions</span>';
+      return '<tr><td class="mono">'+esc(g.station)+'</td><td style="width:30%">'+
+      '<div style="height:9px;border-radius:2px;background:#2f6feb;width:'+
+      Math.max(1,100*g.count/top).toFixed(0)+'%"></div></td><td>'+fmt(g.count)+'</td><td>'+pos+'</td><td>'+
+      dayLabel(g.last)+' '+hourLabel(g.last)+'</td></tr>';}).join("")+'</table>';}
+  stationMap(document.getElementById("stmap"),d.station_est||[],d.positions||[]);
+  const at=document.getElementById("aircraft");
+  if(!d.aircraft.length)emptyMsg(at,"no aircraft");
+  else at.innerHTML='<table><tr><th>ICAO</th><th>Frames</th><th>Best SNR, dB</th><th>Last heard</th></tr>'+
+    d.aircraft.map(a=>'<tr><td class="mono">'+esc(a.icao)+'</td><td>'+fmt(a.count)+'</td><td>'+
+      a.best_snr.toFixed(1)+'</td><td>'+dayLabel(a.last)+' '+hourLabel(a.last)+'</td></tr>').join("")+
+    '</table>';
+
+  const xh=document.getElementById("xid");
+  if(!d.xid.length)emptyMsg(xh,"no XID frames in window");
+  else xh.innerHTML='<table><tr><th>Time (UTC)</th><th>ICAO</th><th>XID</th><th>Station</th>'+
+    '<th>Destination</th><th>Position</th></tr>'+d.xid.map(x=>{
+      const tm=new Date(x.t*1000).toISOString().slice(5,19).replace("T"," ");
+      const stn=(x.from_gs?esc(x.from_gs)+' → ':'')+esc(x.gs);
+      const pos=x.lat==null?'–':Math.abs(x.lat).toFixed(1)+(x.lat<0?'S ':'N ')+
+        Math.abs(x.lon).toFixed(1)+(x.lon<0?'W':'E')+(x.alt!=null?' · '+fmt(x.alt)+' ft':'');
+      return '<tr><td class="mono">'+tm+'</td><td class="mono">'+esc(x.icao)+'</td><td>'+
+        esc(x.kind||'XID')+'</td><td class="mono">'+stn+'</td><td class="mono">'+esc(x.airport||'–')+
+        '</td><td>'+pos+'</td></tr>';}).join("")+'</table>';
+
+  const f=document.getElementById("freshness");
+  if(d.meta.last_run)f.textContent=" Last rollup "+ago(d.meta.last_run)+".";
+}
+
+document.querySelectorAll("#win button").forEach(b=>{
+  b.onclick=()=>{document.querySelectorAll("#win button").forEach(x=>
+    x.classList.remove("on"));b.classList.add("on");
+    win=+b.dataset.h;load();};});
+load();
+setInterval(load,30000);
+</script>
+</body></html>
+"""
