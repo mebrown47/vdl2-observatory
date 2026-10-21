@@ -22,13 +22,20 @@
 #include "waypoint_db.h"
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <signal.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifdef HAVE_RTLSDR
+#include <rtl-sdr.h>
+#endif
+
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cmath>
 #include <complex>
@@ -42,6 +49,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef VDL2_SNIFFER_VERSION
@@ -83,6 +91,10 @@ static const std::map<std::string, std::vector<double>> kPlans = {
 
 struct Options {
     std::string input = "-";
+    std::string rtlsdr;              // device index or serial; "" = not an RTL-SDR
+    std::string gain = "auto";       // tuner gain in dB, or auto
+    int ppm = 0;
+    bool biasTee = false;
     std::string format;              // cu8 | cs8 | ci16 | cf32; empty = from the extension
     double rate = V::Decoder::RequiredSampleRate;
     double centre = 0;               // 0 = the plan's own centre
@@ -103,6 +115,10 @@ static void usage(FILE* out) {
     fprintf(out,
         "usage: vdl2-sniffer [options]\n"
         "  -r, --input FILE      IQ file, or - for stdin (default -)\n"
+        "      --rtlsdr [DEV]    read an RTL-SDR directly: device index or serial (default 0)\n"
+        "      --gain DB         RTL-SDR tuner gain in dB, or auto (default auto)\n"
+        "      --ppm N           RTL-SDR frequency correction in ppm (default 0)\n"
+        "      --bias-tee        RTL-SDR: power the antenna port (off by default)\n"
         "      --format F        cu8 | cs8 | ci16 | cf32 (default: from extension, cu8 on stdin)\n"
         "  -s, --rate HZ         input sample rate (default 1050000)\n"
         "  -c, --centre HZ       input centre frequency (default: the channel plan's centre)\n"
@@ -162,6 +178,10 @@ static bool parseOptions(int argc, char** argv, Options& o) {
         };
         if (k == "-h" || k == "--help") { usage(stdout); exit(0); }
         else if (k == "-r" || k == "--input") { if (!need()) return false; o.input = val; }
+        else if (k == "--rtlsdr") { maybe("0"); o.rtlsdr = val; }
+        else if (k == "--gain") { if (!need()) return false; o.gain = val; }
+        else if (k == "--ppm") { if (!need()) return false; o.ppm = atoi(val.c_str()); }
+        else if (k == "--bias-tee") o.biasTee = true;
         else if (k == "--format") { if (!need()) return false; o.format = val; }
         else if (k == "-s" || k == "--rate") { if (!need()) return false; o.rate = atof(val.c_str()); }
         else if (k == "-c" || k == "--centre" || k == "--center") { if (!need()) return false; o.centre = atof(val.c_str()); }
@@ -186,6 +206,17 @@ static bool parseOptions(int argc, char** argv, Options& o) {
     }
     std::sort(o.channels.begin(), o.channels.end());
     o.channels.erase(std::unique(o.channels.begin(), o.channels.end()), o.channels.end());
+    if (!o.rtlsdr.empty()) {
+#ifndef HAVE_RTLSDR
+        fprintf(stderr, "vdl2-sniffer: built without librtlsdr, so --rtlsdr is not available\n");
+        return false;
+#endif
+        if (!o.format.empty() && o.format != "cu8") {
+            fprintf(stderr, "vdl2-sniffer: an RTL-SDR delivers cu8\n");
+            return false;
+        }
+        o.format = "cu8";
+    }
     if (o.format.empty()) {
         auto ends = [&](const char* e) {
             const size_t n = strlen(e);
@@ -443,6 +474,119 @@ private:
     int fd_ = -1;
 };
 
+/* ---------- RTL-SDR ---------- */
+
+#ifdef HAVE_RTLSDR
+// A live RTL-SDR. librtlsdr's reader thread hands the samples to the main
+// loop through a pipe, so they arrive exactly as stdin would. A buffer the
+// pipe has no room for is dropped whole and counted rather than written
+// late: blocking in the callback would stall the USB transfers and lose
+// samples without a trace. The main loop moves its clock on by what was
+// dropped, so frame times stay true.
+class RtlInput {
+public:
+    std::atomic<uint64_t> dropped{0};   // bytes
+    std::atomic<bool> failed{false};    // the device stopped without being asked
+
+    FILE* open(const Options& o) {
+        if (rtlsdr_get_device_count() == 0) {
+            fprintf(stderr, "vdl2-sniffer: no RTL-SDR found\n");
+            return nullptr;
+        }
+        // A short number is an index; anything else is a serial ("00000001").
+        int idx = o.rtlsdr.size() <= 2 && o.rtlsdr.find_first_not_of("0123456789") == std::string::npos
+                ? atoi(o.rtlsdr.c_str()) : rtlsdr_get_index_by_serial(o.rtlsdr.c_str());
+        if (idx < 0 || rtlsdr_open(&dev_, (uint32_t)idx) < 0) {
+            fprintf(stderr, "vdl2-sniffer: cannot open RTL-SDR %s\n", o.rtlsdr.c_str());
+            dev_ = nullptr;
+            return nullptr;
+        }
+        char vendor[256] = "", product[256] = "", serial[256] = "";
+        rtlsdr_get_usb_strings(dev_, vendor, product, serial);
+        if (rtlsdr_set_sample_rate(dev_, (uint32_t)std::lround(o.rate)) < 0 ||
+            rtlsdr_set_center_freq(dev_, (uint32_t)std::lround(o.centre)) < 0) {
+            fprintf(stderr, "vdl2-sniffer: RTL-SDR refused %.0f S/s at %.4f MHz\n", o.rate, o.centre / 1e6);
+            return nullptr;
+        }
+        if (o.ppm) rtlsdr_set_freq_correction(dev_, o.ppm);
+        std::string gainText = "auto";
+        if (o.gain == "auto") {
+            rtlsdr_set_tuner_gain_mode(dev_, 0);
+        } else {
+            // the nearest gain the tuner has, in tenths of a dB
+            int n = rtlsdr_get_tuner_gains(dev_, nullptr);
+            std::vector<int> gains(n > 0 ? n : 0);
+            if (n > 0) rtlsdr_get_tuner_gains(dev_, gains.data());
+            const int want = (int)std::lround(atof(o.gain.c_str()) * 10);
+            int best = want;
+            for (int g : gains) if (std::abs(g - want) < std::abs(best - want) || best == want) best = g;
+            rtlsdr_set_tuner_gain_mode(dev_, 1);
+            rtlsdr_set_tuner_gain(dev_, best);
+            char b[32];
+            snprintf(b, sizeof b, "%.1f dB", best / 10.0);
+            gainText = b;
+        }
+        rtlsdr_set_bias_tee(dev_, o.biasTee ? 1 : 0);
+        rtlsdr_reset_buffer(dev_);
+
+        if (pipe2(fd_, O_CLOEXEC) < 0) { perror("pipe"); return nullptr; }
+        fcntl(fd_[1], F_SETPIPE_SZ, 1 << 20);   // about half a second at 1.05 MS/s
+        pipeSize_ = fcntl(fd_[1], F_GETPIPE_SZ);
+        fprintf(stderr, "vdl2-sniffer: RTL-SDR %d (%s %s, serial %s), gain %s, %d ppm, bias tee %s\n",
+                idx, vendor, product, serial, gainText.c_str(), o.ppm, o.biasTee ? "on" : "off");
+        th_ = std::thread([this] {
+            // 32 transfers of 64 KiB (31 ms each)
+            int r = rtlsdr_read_async(dev_, &RtlInput::onSamples, this, 32, 65536);
+            if (!cancelled_) {
+                failed = true;
+                fprintf(stderr, "vdl2-sniffer: RTL-SDR stopped (%d)\n", r);
+            }
+            close(fd_[1]);
+            fd_[1] = -1;
+        });
+        return fdopen(fd_[0], "rb");
+    }
+
+    // Stop the device and wait for its thread; the pipe then reads as ended.
+    void stop() {
+        if (!dev_) return;
+        cancelled_ = true;
+        rtlsdr_cancel_async(dev_);
+        if (th_.joinable()) th_.join();
+        rtlsdr_close(dev_);
+        dev_ = nullptr;
+    }
+    ~RtlInput() { stop(); }
+
+private:
+    static void onSamples(unsigned char* buf, uint32_t len, void* ctx) {
+        auto* self = static_cast<RtlInput*>(ctx);
+        if (stopRequested) {
+            self->cancelled_ = true;
+            rtlsdr_cancel_async(self->dev_);
+            return;
+        }
+        int queued = 0;
+        ioctl(self->fd_[1], FIONREAD, &queued);
+        if (self->pipeSize_ - queued < (int)len) {
+            self->dropped += len;
+            return;
+        }
+        for (uint32_t off = 0; off < len; ) {
+            ssize_t w = write(self->fd_[1], buf + off, len - off);
+            if (w <= 0) { if (errno == EINTR) continue; return; }
+            off += (uint32_t)w;
+        }
+    }
+
+    rtlsdr_dev_t* dev_ = nullptr;
+    int fd_[2] = {-1, -1};
+    int pipeSize_ = 0;
+    std::thread th_;
+    std::atomic<bool> cancelled_{false};
+};
+#endif
+
 /* ---------- per-channel health ---------- */
 
 struct ChannelStats {
@@ -486,15 +630,26 @@ int main(int argc, char** argv) {
     std::vector<ChannelStats> stats(o.channels.size());
     V::AcarsReassembler reasm;
 
-    FILE* in = o.input == "-" ? stdin : fopen(o.input.c_str(), "rb");
-    if (!in) { perror(o.input.c_str()); return 1; }
+    const bool live = !o.rtlsdr.empty();
+#ifdef HAVE_RTLSDR
+    RtlInput rtl;
+#endif
+    FILE* in = nullptr;
+    if (live) {
+#ifdef HAVE_RTLSDR
+        if (!(in = rtl.open(o))) return 1;
+#endif
+    } else {
+        in = o.input == "-" ? stdin : fopen(o.input.c_str(), "rb");
+        if (!in) { perror(o.input.c_str()); return 1; }
+    }
     const size_t bps = o.format == "cf32" ? 8 : o.format == "ci16" ? 4 : 2;
 
     double t0;
     if (!o.start.empty()) {
         t0 = parseStart(o.start);
         if (t0 < 0) { fprintf(stderr, "vdl2-sniffer: cannot read --start %s\n", o.start.c_str()); return 2; }
-    } else if (in != stdin) {
+    } else if (in != stdin && !live) {
         struct stat st;
         t0 = fstat(fileno(in), &st) == 0 ? st.st_mtime - (double)st.st_size / bps / o.rate : nowSeconds();
     } else {
@@ -773,6 +928,9 @@ int main(int argc, char** argv) {
     const uint64_t maxIn = o.maxSeconds > 0 ? (uint64_t)(o.maxSeconds * o.rate) : UINT64_MAX;
     uint64_t inCount = 0;
     size_t carry = 0;   // bytes of a partial sample left from the last read
+    uint64_t droppedSamples = 0, minuteDropped = 0;
+    double lastDropReport = 0;
+    if (live) setvbuf(stdout, nullptr, _IOLBF, 0);
 
     while (!stopRequested) {
         size_t want = chunk;
@@ -791,6 +949,23 @@ int main(int argc, char** argv) {
         }
         if (carry) memmove(raw.data(), raw.data() + k * bps, carry);
         inCount += k;
+#ifdef HAVE_RTLSDR
+        // Samples the decoder had no room for: the clock moves on past them.
+        if (live) {
+            if (const uint64_t d = rtl.dropped.exchange(0)) {
+                t0 += d / (double)bps / o.rate;
+                droppedSamples += d / bps;
+                minuteDropped += d / bps;
+            }
+            const double now = nowSeconds();
+            if (minuteDropped && now - lastDropReport >= 60) {
+                fprintf(stderr, "vdl2-sniffer: %.2f s of samples dropped in the last minute (decoder behind)\n",
+                        minuteDropped / o.rate);
+                minuteDropped = 0;
+                lastDropReport = now;
+            }
+        }
+#endif
 
         const cf* feed = iq.data();
         size_t nfeed = k;
@@ -827,6 +1002,13 @@ int main(int argc, char** argv) {
     }
     flushMinute();
 
+    bool deviceFailed = false;
+#ifdef HAVE_RTLSDR
+    if (live) {
+        rtl.stop();
+        deviceFailed = rtl.failed;
+    }
+#endif
     if (jsonOut && jsonOut != stdout) fclose(jsonOut);
     if (in != stdin) fclose(in);
 
@@ -841,5 +1023,8 @@ int main(int argc, char** argv) {
             fprintf(stderr, "  %.3f MHz: %6llu bursts %5llu frames %5llu ACARS\n", o.channels[i] / 1e6,
                     (unsigned long long)stats[i].bursts, (unsigned long long)stats[i].frames,
                     (unsigned long long)stats[i].acars);
-    return 0;
+    if (droppedSamples)
+        fprintf(stderr, "  %.1f s of samples dropped (decoder behind)\n", droppedSamples / o.rate);
+    // A receiver that went away is a failure, so a service manager restarts us.
+    return deviceFailed ? 1 : 0;
 }
