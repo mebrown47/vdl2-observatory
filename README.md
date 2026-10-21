@@ -110,7 +110,8 @@ report the aircraft's current position count (H1, 20, 44, 4J, 15, SA; not H1 fli
 Coordinates written in the text come first (`POSN46247W101478`, `N33521W084123`,
 `LAT N 46:27.2 LONG W101:39.7` and similar). Trajectory and weather reports carry several timed
 records, oldest first, and the newest one counts: `TRP` reports (`TRP 110814  32.8998  -97.0403`,
-records `/A1` to `/A5`, or `#`-separated) and degrees-and-minutes records (`N3006.4,W08531.3,210145`). Failing that, a `POS` report that names a fix instead
+records `/A1` to `/A5`, or `#`-separated) and degrees-and-minutes records (`N3006.4,W08531.3,210145`). Labels 32 and 83 have position reports of their own:
+`P,R,…,N45.773 W101.368,…` (32), `001PR26190048N4500.6W10043.3…` and `EHAM,KLAX,261903, 46.79,-101.63,…` (83). Failing that, a `POS` report that names a fix instead
 of coordinates gives that fix, looked up in the fix list; the aircraft may be well past it. The fix
 lookup is held to `POS` reports because anywhere else it matches ordinary words. Positions go into
 the JSON (`ac_pos`), the `acars` and `vpos` archive events and the summary line.
