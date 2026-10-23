@@ -85,12 +85,11 @@ class Decoder {
         int mixerStep = 0;
         int mixerPhase = 0;
 
-        std::vector<std::complex<float>> aaHist;   // decimation anti-alias
-        std::size_t aaPos = 0;
-        int decimPhase = 0;
-
-        std::vector<std::complex<float>> chHist;   // channel filter
-        std::size_t chPos = 0;
+        // (vdl2-sniffer) Filter input not yet used up, real and imaginary apart: the
+        // mixed samples from the oldest the next anti-alias output needs, and the
+        // channel filter's last 120 inputs before the new ones.
+        std::vector<float> aaRe, aaIm;
+        std::vector<float> chRe, chIm;
 
         std::vector<std::complex<float>> ring;     // filtered, at 105 kS/s
         std::size_t ringPos = 0;
@@ -105,13 +104,16 @@ class Decoder {
         std::uint64_t quietFor = 0;
     };
 
-    void pushSample(Channel& c, std::complex<float> s, const Callback& cb);
+    void channelFilter(Channel& c, const Callback& cb);
+    void pushFiltered(Channel& c, std::complex<float> f, const Callback& cb);
     void tryBurst(Channel& c, std::uint64_t from, std::uint64_t to, const Callback& cb);
 
     double centre_;
     std::vector<Channel> channels_;
     std::vector<float> aaTaps_, chTaps_;
     std::vector<std::complex<float>> mixer_;
+    std::vector<float> polyRe_, polyIm_, outRe_, outIm_;   // filter scratch
+    std::vector<std::size_t> tapAt_;
     bool narrow_ = false;
     ReedSolomon rs_;
     std::uint64_t bursts_ = 0, frames_ = 0;

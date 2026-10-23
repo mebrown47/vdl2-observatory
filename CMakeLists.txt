@@ -57,6 +57,11 @@ endif()
 add_executable(vdl2-xid-test tests/xid_test.cc vdl2_xid.cc)
 target_include_directories(vdl2-xid-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# The filters give the same frames however the input is cut up (needs a capture)
+add_executable(vdl2-block-test tests/block_test.cc
+    third_party/vdl2/vdl2_decoder.cc third_party/vdl2/vdl2_rs.cc)
+target_include_directories(vdl2-block-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 # Positions from ACARS text (tests/run_tests.sh)
 add_executable(test-acars-position tests/test_acars_position.c acars_position.c waypoint_db.c)
 target_include_directories(test-acars-position PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

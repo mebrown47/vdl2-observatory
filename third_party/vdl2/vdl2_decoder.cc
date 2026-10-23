@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 namespace Jetstream::Vdl2Receiver {
 
@@ -45,6 +46,73 @@ const int H[5][20] = {
  {1,1,0,1,1,0,1,1,0,1,0,1,0,0,1,1,0,0,1,1},
  {0,1,1,0,1,0,0,1,1,1,1,0,0,1,0,1,0,1,0,1},
 };
+
+// (vdl2-sniffer) out[i] = the sum over taps t of x[at[t] + i] * h[t]. Each sum is
+// built tap by tap from t = 0, as the per-sample ring loop built it, so the result
+// is the same to the bit -- but NV vectors of outputs are summed side by side in
+// registers, and no ring index is wrapped per tap.
+template <class V, std::size_t NV>
+inline __attribute__((always_inline)) void FirBlocks(const float* h, std::size_t taps,
+                                                     const std::size_t* at, const float* xRe,
+                                                     const float* xIm, std::size_t n,
+                                                     float* outRe, float* outIm) {
+    constexpr std::size_t L = sizeof(V) / sizeof(float), B = L * NV;
+    std::size_t i0 = 0;
+    for (; i0 + B <= n; i0 += B) {
+        V re[NV] = {}, im[NV] = {};
+        for (std::size_t t = 0; t < taps; ++t) {
+            const float* xr = xRe + at[t] + i0;
+            const float* xi = xIm + at[t] + i0;
+            const float k = h[t];
+            for (std::size_t j = 0; j < NV; ++j) {
+                V r, q;
+                std::memcpy(&r, xr + j * L, sizeof r);
+                std::memcpy(&q, xi + j * L, sizeof q);
+                re[j] += r * k;
+                im[j] += q * k;
+            }
+        }
+        for (std::size_t j = 0; j < NV; ++j) {
+            std::memcpy(outRe + i0 + j * L, &re[j], sizeof(V));
+            std::memcpy(outIm + i0 + j * L, &im[j], sizeof(V));
+        }
+    }
+    for (; i0 < n; ++i0) {
+        float re = 0.0f, im = 0.0f;
+        for (std::size_t t = 0; t < taps; ++t) {
+            re += xRe[at[t] + i0] * h[t];
+            im += xIm[at[t] + i0] * h[t];
+        }
+        outRe[i0] = re;
+        outIm[i0] = im;
+    }
+}
+
+typedef float Float4 __attribute__((vector_size(16)));
+typedef float Float8 __attribute__((vector_size(32)));
+
+#if defined(__x86_64__) && !defined(__AVX2__)
+// AVX2 without FMA, so the products are still rounded before they are added.
+__attribute__((target("avx2"))) void FirAvx2(const float* h, std::size_t taps,
+                                             const std::size_t* at, const float* xRe,
+                                             const float* xIm, std::size_t n, float* outRe,
+                                             float* outIm) {
+    FirBlocks<Float8, 4>(h, taps, at, xRe, xIm, n, outRe, outIm);
+}
+const bool HaveAvx2 = __builtin_cpu_supports("avx2");
+#endif
+
+void Fir(const std::vector<float>& h, const std::size_t* at, const float* xRe, const float* xIm,
+         std::size_t n, float* outRe, float* outIm) {
+#if defined(__AVX2__)
+    FirBlocks<Float8, 4>(h.data(), h.size(), at, xRe, xIm, n, outRe, outIm);
+#else
+#if defined(__x86_64__)
+    if (HaveAvx2) return FirAvx2(h.data(), h.size(), at, xRe, xIm, n, outRe, outIm);
+#endif
+    FirBlocks<Float4, 6>(h.data(), h.size(), at, xRe, xIm, n, outRe, outIm);
+#endif
+}
 
 std::vector<float> lowpass(double cutoff, double rate, int taps) {
     std::vector<float> h(taps);
@@ -197,10 +265,12 @@ Decoder::Decoder(double centreHz, const std::vector<double>& chans) : centre_(ce
 
 void Decoder::reset() {
     for (auto& c : channels_) {
-        c.aaHist.assign(aaTaps_.size(), {0.0f, 0.0f});
-        c.chHist.assign(chTaps_.size(), {0.0f, 0.0f});
-        c.aaPos = c.chPos = 0;
-        c.decimPhase = 0;
+        // Zeros before the first sample, as many as the first output's window
+        // (ten samples in) and the channel filter's history hold.
+        c.aaRe.assign(aaTaps_.empty() ? 0 : aaTaps_.size() - Decimation, 0.0f);
+        c.aaIm.assign(c.aaRe.size(), 0.0f);
+        c.chRe.assign(chTaps_.size() - 1, 0.0f);
+        c.chIm.assign(c.chRe.size(), 0.0f);
         c.mixerPhase = 0;
         c.ring.assign(RING, {0.0f, 0.0f});
         c.ringPos = 0; c.ringCount = 0;
@@ -224,46 +294,78 @@ Decoder::Decoder(double channelHz) : centre_(channelHz), narrow_(true) {
 
 void Decoder::process(const std::complex<float>* iq, std::size_t n, const Callback& cb) {
     if (narrow_) {
-        // Already at the channel and already at rate: straight in.
+        // Already at the channel and already at rate: straight to the channel filter.
         Channel& c = channels_.front();
         for (std::size_t i = 0; i < n; ++i) {
-            pushSample(c, iq[i], cb);
+            c.chRe.push_back(iq[i].real());
+            c.chIm.push_back(iq[i].imag());
         }
+        channelFilter(c, cb);
         return;
     }
 
+    const std::size_t taps = aaTaps_.size();
     for (auto& c : channels_) {
+        const std::size_t have = c.aaRe.size();
+        c.aaRe.resize(have + n);
+        c.aaIm.resize(have + n);
+        float* re = c.aaRe.data() + have;
+        float* im = c.aaIm.data() + have;
         for (std::size_t i = 0; i < n; ++i) {
-            const std::complex<float> mixed = iq[i] * mixer_[c.mixerPhase];
+            const std::complex<float> m = mixer_[c.mixerPhase];
+            re[i] = iq[i].real() * m.real() - iq[i].imag() * m.imag();
+            im[i] = iq[i].real() * m.imag() + iq[i].imag() * m.real();
             c.mixerPhase += c.mixerStep;
             if (c.mixerPhase >= MixerPeriod) c.mixerPhase -= MixerPeriod;
-
-            c.aaHist[c.aaPos] = mixed;
-            c.aaPos = (c.aaPos + 1) % c.aaHist.size();
-            if (++c.decimPhase < Decimation) continue;
-            c.decimPhase = 0;
-
-            std::complex<float> acc{0.0f, 0.0f};
-            std::size_t k = c.aaPos;
-            for (std::size_t t = 0; t < aaTaps_.size(); ++t) {
-                acc += c.aaHist[k] * aaTaps_[t];
-                k = (k + 1) % c.aaHist.size();
-            }
-            pushSample(c, acc, cb);
         }
+
+        // Every tenth sample closes a window of 121, oldest first.
+        const std::size_t len = c.aaRe.size();
+        if (len < taps) continue;
+        const std::size_t outs = (len - taps) / Decimation + 1;
+        // Tap t of output i is sample 10 (i + t / 10) + t % 10. Each of the ten
+        // phases on a row of its own makes every tap's samples consecutive.
+        const std::size_t row = outs + (taps - 1) / Decimation;
+        polyRe_.resize(Decimation * row);
+        polyIm_.resize(Decimation * row);
+        for (int r = 0; r < Decimation; ++r) {
+            for (std::size_t m = 0; m < row; ++m) {
+                const std::size_t k = m * Decimation + r;
+                polyRe_[r * row + m] = k < len ? c.aaRe[k] : 0.0f;
+                polyIm_[r * row + m] = k < len ? c.aaIm[k] : 0.0f;
+            }
+        }
+        const std::size_t chHave = c.chRe.size();
+        c.chRe.resize(chHave + outs);
+        c.chIm.resize(chHave + outs);
+        tapAt_.resize(taps);
+        for (std::size_t t = 0; t < taps; ++t) tapAt_[t] = (t % Decimation) * row + t / Decimation;
+        Fir(aaTaps_, tapAt_.data(), polyRe_.data(), polyIm_.data(), outs,
+                 c.chRe.data() + chHave, c.chIm.data() + chHave);
+        c.aaRe.erase(c.aaRe.begin(), c.aaRe.begin() + outs * Decimation);
+        c.aaIm.erase(c.aaIm.begin(), c.aaIm.begin() + outs * Decimation);
+
+        channelFilter(c, cb);
     }
 }
 
-void Decoder::pushSample(Channel& c, std::complex<float> s, const Callback& cb) {
-    c.chHist[c.chPos] = s;
-    c.chPos = (c.chPos + 1) % c.chHist.size();
-    std::complex<float> f{0.0f, 0.0f};
-    std::size_t k = c.chPos;
-    for (std::size_t t = 0; t < chTaps_.size(); ++t) {
-        f += c.chHist[k] * chTaps_[t];
-        k = (k + 1) % c.chHist.size();
-    }
+void Decoder::channelFilter(Channel& c, const Callback& cb) {
+    const std::size_t taps = chTaps_.size();
+    const std::size_t len = c.chRe.size();
+    if (len < taps) return;
+    const std::size_t outs = len - taps + 1;
+    outRe_.resize(outs);
+    outIm_.resize(outs);
+    tapAt_.resize(taps);
+    for (std::size_t t = 0; t < taps; ++t) tapAt_[t] = t;
+    Fir(chTaps_, tapAt_.data(), c.chRe.data(), c.chIm.data(), outs, outRe_.data(),
+             outIm_.data());
+    c.chRe.erase(c.chRe.begin(), c.chRe.begin() + outs);
+    c.chIm.erase(c.chIm.begin(), c.chIm.begin() + outs);
+    for (std::size_t i = 0; i < outs; ++i) pushFiltered(c, {outRe_[i], outIm_[i]}, cb);
+}
 
+void Decoder::pushFiltered(Channel& c, std::complex<float> f, const Callback& cb) {
     c.ring[c.ringPos] = f;
     c.ringPos = (c.ringPos + 1) % RING;
     c.ringCount++;

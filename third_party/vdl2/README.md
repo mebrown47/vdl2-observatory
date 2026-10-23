@@ -27,6 +27,13 @@ Changes marked `(vdl2-sniffer)` in the source:
   550-octet feeder frame (56-octet last block: zero corrections with 4, 6 with 2, 4 with 6),
   and on ~140 single-block frames: 44-66 octets show the 4-parity signature, 73 and up do not.
   The limits at 30 and 67 sit in unobserved gaps (31-43, 67-72).
+- **Filters a buffer at a time.** The mixer, the decimating anti-alias FIR and the channel FIR
+  ran per sample through ring buffers, with a modulo per tap; they took ~95% of the CPU. Now each
+  buffer is mixed into real and imaginary arrays, the ten decimation phases are laid out apart,
+  and outputs are summed several vectors at a time (AVX2 when the CPU has it, chosen at run
+  time). Every sum is still built tap by tap in the same order with no fused multiply-add, so
+  the filtered samples, and the frames, are bit-identical: 357 of 357 on ten captures, at a
+  thirteenth of the CPU time. `pushSample` became `channelFilter` + `pushFiltered`.
 
 Keep in step with CyberEther by copying the files again
-and re-applying the marked changes. The last two are worth sending upstream.
+and re-applying the marked changes. The last three are worth sending upstream.

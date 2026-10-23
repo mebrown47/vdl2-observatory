@@ -195,12 +195,13 @@ dashboard estimates each station's position instead, from the positions of aircr
 ## Known gaps
 
 - Direct input from RTL-SDR only (`--rtlsdr`); other receivers come through stdin (`airspy_rx`).
-- No installer or live map yet.
+- No installer yet.
 - `sig_level` and `noise_level` are not in the JSON. The receiver measures SNR only, which is in
   `snr`.
 - The air/ground status bit is read but untested: no capture has an aircraft on the ground.
 - Packed trajectory records (`C1TRP` with `/C2324491,-0866412`) are not parsed.
-- CPU: about 11% of a core per channel at 1.05 MS/s.
+- CPU: about 1% of a core per channel at 1.05 MS/s (eight channels: 7.5% of one laptop core with
+  AVX2, 9% without). Nearly all of it is the mixer and the two channel filters.
 
 ## Licence
 

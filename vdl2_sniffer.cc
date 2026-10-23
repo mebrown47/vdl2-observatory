@@ -1010,11 +1010,12 @@ int main(int argc, char** argv) {
         const size_t k = nread / bps;
         carry = nread - k * bps;
         if (!k) { if (feof(in) || ferror(in)) break; continue; }
+        const bool cs8 = o.format == "cs8";
         for (size_t i = 0; i < k; i++) {
             const uint8_t* p = &raw[bps * i];
             if (bps == 8) { float r, q; memcpy(&r, p, 4); memcpy(&q, p + 4, 4); iq[i] = {r, q}; }
             else if (bps == 4) { int16_t r, q; memcpy(&r, p, 2); memcpy(&q, p + 2, 2); iq[i] = {r / 32768.f, q / 32768.f}; }
-            else if (o.format == "cs8") iq[i] = {(int8_t)p[0] / 128.f, (int8_t)p[1] / 128.f};
+            else if (cs8) iq[i] = {(int8_t)p[0] / 128.f, (int8_t)p[1] / 128.f};
             else iq[i] = {(p[0] - 127.5f) / 127.5f, (p[1] - 127.5f) / 127.5f};
         }
         if (carry) memmove(raw.data(), raw.data() + k * bps, carry);
