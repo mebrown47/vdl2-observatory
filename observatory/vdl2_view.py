@@ -222,6 +222,7 @@ VDL2_PAGE = r"""<!doctype html>
     --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2b333d;
     --fg:#e6edf3; --dim:#8b98a5; --accent:#4aa8ff; --good:#3fb950;
     --warn:#d29922; --hot:#f778ba; --grid:#242c36;
+    --coast:#3e4c5c; --border:#4a5665; --state:#29323d;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);
@@ -310,6 +311,7 @@ VDL2_PAGE = r"""<!doctype html>
     <h2>Station map <span class="hint">each station at the centre of the positions of aircraft talking to or hearing it, all time; biased towards this receiver for distant stations. Click a station (here or in Ground stations) for its spread and positions</span></h2>
     <div id="stmap"></div>
     <div id="stsel" class="stsel"></div>
+    <div class="stsel" style="text-align:right">outlines: Natural Earth</div>
   </div>
   <div class="grid">
     <div>
@@ -425,6 +427,32 @@ function ll(lat,lon){return Math.abs(lat).toFixed(1)+(lat<0?'S ':'N ')+
 // station's details stay in its tooltip), busiest stations first.
 // #st=ID in the address selects a station, so a view can be shared.
 let SEL=(location.hash.match(/st=([0-9A-Fa-f]{6})/)||[])[1]||null, MAPDATA=null;
+// Background lines from /map.json (Natural Earth 1:50m, data/outlines.json),
+// fetched once. Each line keeps its box, so only those in view are drawn, and the
+// path is rebuilt only when the view moves.
+let OUT=null,outKey="",outD={};
+const OUTSTYLE={state:["var(--state)",.8],lake:["var(--coast)",1],border:["var(--border)",1.1],coast:["var(--coast)",1.2]};
+fetch("/map.json").then(r=>r.json()).then(d=>{const q=d.q;OUT={};
+  for(const [k,ls] of Object.entries(d.layers))OUT[k]=ls.map(e=>{const p=new Float32Array(e.length);
+    let x=e[0],y=e[1],b=[x,y,x,y];p[0]=x/q;p[1]=y/q;
+    for(let i=2;i<e.length;i+=2){x+=e[i];y+=e[i+1];p[i]=x/q;p[i+1]=y/q;
+      if(x<b[0])b[0]=x;if(x>b[2])b[2]=x;if(y<b[1])b[1]=y;if(y>b[3])b[3]=y;}
+    return {p,b:b.map(v=>v/q)};});
+  if(MAPDATA)stationMap(...MAPDATA);}).catch(()=>{});
+function outlines(s,X,Y,lo0,la0,lo1,la1){
+  if(!OUT)return;const key=[lo0,la0,lo1,la1,X(lo1),Y(la0)].map(v=>v.toFixed(4)).join();
+  if(key!==outKey){outKey=key;outD={};
+    for(const k in OUTSTYLE){let d="";
+      for(const l of OUT[k]||[]){const b=l.b,p=l.p;if(b[2]<lo0||b[0]>lo1||b[3]<la0||b[1]>la1)continue;
+        d+="M"+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1);
+        for(let i=2;i<p.length;i+=2)d+="L"+X(p[i]).toFixed(1)+" "+Y(p[i+1]).toFixed(1);}
+      outD[k]=d;}}
+  // this page's svg overflows on purpose, so the lines are clipped to the frame
+  const W=X(lo1),H=Y(la0),cp=el("clipPath",{id:"outclip"}),g=el("g",{"clip-path":"url(#outclip)"});
+  cp.appendChild(el("rect",{x:0,y:0,width:W,height:H}));s.appendChild(cp);s.appendChild(g);
+  for(const k in OUTSTYLE)if(outD[k])g.appendChild(el("path",{d:outD[k],fill:"none",stroke:OUTSTYLE[k][0],
+    "stroke-width":OUTSTYLE[k][1],"stroke-linejoin":"round","pointer-events":"none"}));
+}
 if(SEL)SEL=SEL.toUpperCase();
 function selectStation(id){SEL=SEL===id?null:id;
   history.replaceState(null,"",SEL?"#st="+SEL:location.pathname+location.search);
@@ -462,6 +490,9 @@ function stationMap(host,all,pos){
   for(let g=Math.ceil(la0);g<=la1;g++){if(g%step)continue;
     s.appendChild(el("line",{x1:0,y1:Y(g),x2:W,y2:Y(g),class:"gl"}));
     s.appendChild(el("text",{x:4,y:Y(g)-4,class:"mapax"},Math.abs(g)+(g<0?"S":"N")));}
+  // what the box shows, which is wider than the data one way or the other
+  const lonAt=x=>lo0+(x-X(lo0))/(k*sc),latAt=y=>la1-(y-Y(la1))/sc;
+  outlines(s,X,Y,lonAt(0),latAt(H),lonAt(W),latAt(0));
   const at={};st.forEach(x=>at[x.station]=x);
   const sel=SEL?at[SEL]:null;
   if(sel){

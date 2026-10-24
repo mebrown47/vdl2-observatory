@@ -104,7 +104,8 @@ python3 observatory/server.py --db observatory/observatory.db      # http://HOST
   - frames per hour by channel
   - per-channel decoder health (frames per burst, SNR percentiles)
   - messages per hour
-  - ground stations, with a map of their estimated positions
+  - ground stations, with a map of their estimated positions over the same Natural Earth
+    outlines as the live page (`/map.json`, read from `data/outlines.json`)
   - handoffs between stations, and aircraft positions
   - the busiest aircraft
 - **Messages** (`/messages`): each aircraft's messages, the CPDLC log and ADS-C.

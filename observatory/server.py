@@ -13,6 +13,7 @@ observatory/trends_server.py.
   GET /api/vdl2      -> its data (optional ?hours=N window)
   GET /messages      -> per-tail history, CPDLC and ADS-C
   GET /api/messages  -> its data (optional ?tail=REG&limit=N)
+  GET /map.json      -> the map's background lines (data/outlines.json)
   GET /healthz       -> ok
 
 Usage:
@@ -33,6 +34,7 @@ import messages_view  # noqa: E402
 import vdl2_view  # noqa: E402
 
 DB_PATH = "observatory/observatory.db"
+OUTLINES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "outlines.json")
 # iridium-sniffer's Observatory uses 8890, so both can run on one machine.
 PORT = 8891
 
@@ -44,12 +46,12 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-    def _send(self, code, body, ctype):
+    def _send(self, code, body, ctype, cache="no-store"):
         if isinstance(body, str):
             body = body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if self.command != "HEAD":
@@ -79,6 +81,15 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 limit = 200
             self._json(messages_view.build_messages, self.db_path, tail, limit)
+        elif u.path == "/map.json":
+            try:
+                with open(OUTLINES, "rb") as f:
+                    body = f.read()
+            except OSError:
+                self._send(404, "no outlines: " + OUTLINES, "text/plain")
+                return
+            # Changes only with the repo: let the browser keep it for a day.
+            self._send(200, body, "application/json", "public, max-age=86400")
         elif u.path == "/healthz":
             self._send(200, "ok", "text/plain")
         else:
