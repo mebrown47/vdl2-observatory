@@ -69,6 +69,7 @@ double km(double lat1, double lon1, double lat2, double lon2) {
 bool isStation(int kind) { return kind == 4 || kind == 5; }
 
 extern const char kPage[];
+extern const char kOutlines[];
 
 }  // namespace
 
@@ -322,14 +323,20 @@ void Server::handle(int fd) {
     if (sscanf(req, "%7s %255s", method, path) != 2) return;
     if (char* q = strchr(path, '?')) *q = '\0';
     const bool head = strcmp(method, "HEAD") == 0;
-    std::string body, type = "text/plain", status = "200 OK";
+    std::string body, type = "text/plain", status = "200 OK", cache = "no-store";
     if (strcmp(method, "GET") != 0 && !head) { status = "405 Method Not Allowed"; body = "GET only"; }
     else if (strcmp(path, "/") == 0) { body = kPage; type = "text/html; charset=utf-8"; }
     else if (strcmp(path, "/api/state") == 0) { body = stateJson(); type = "application/json"; }
     else if (strcmp(path, "/healthz") == 0) body = "ok";
+    else if (strcmp(path, "/map.json") == 0) {
+        // The same for the life of the binary: let the browser keep it for a day.
+        body = kOutlines;
+        type = "application/json";
+        cache = "public, max-age=86400";
+    }
     else { status = "404 Not Found"; body = "not found"; }
     std::string out = "HTTP/1.1 " + status + "\r\nContent-Type: " + type + "\r\nContent-Length: " +
-                      std::to_string(body.size()) + "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
+                      std::to_string(body.size()) + "\r\nCache-Control: " + cache + "\r\nConnection: close\r\n\r\n";
     if (!head) out += body;
     for (size_t off = 0; off < out.size();) {
         const ssize_t w = send(fd, out.data() + off, out.size() - off, MSG_NOSIGNAL);
@@ -349,7 +356,8 @@ const char kPage[] = R"PAGE(<!doctype html>
 <title>VDL2 live</title>
 <style>
   :root{--bg:#0e1116;--panel:#161b22;--panel2:#1c232c;--line:#2b333d;--grid:#222a33;
-    --fg:#e6edf3;--dim:#8b98a5;--accent:#4aa8ff;--good:#3fb950;--warn:#d29922;--hot:#f778ba}
+    --fg:#e6edf3;--dim:#8b98a5;--accent:#4aa8ff;--good:#3fb950;--warn:#d29922;--hot:#f778ba;
+    --coast:#3e4c5c;--border:#4a5665;--state:#29323d}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);
     font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
@@ -407,7 +415,7 @@ const char kPage[] = R"PAGE(<!doctype html>
   <div class="panel">
     <h2>Map <span class="hint">aircraft positions from handoffs and ACARS text, last hour; stations at the centre of the positions reported to them since the receiver started</span></h2>
     <div id="map"></div>
-    <div class="key"><i style="background:#4aa8ff"></i>ground station<i style="background:#e6edf3;border-radius:50%"></i>aircraft, latest position (fades with age)<i style="background:#8b98a5;height:2px"></i>its track</div>
+    <div class="key"><i style="background:#4aa8ff"></i>ground station<i style="background:#e6edf3;border-radius:50%"></i>aircraft, latest position (fades with age)<i style="background:#8b98a5;height:2px"></i>its track<span style="float:right">outlines: Natural Earth</span></div>
   </div>
   <div class="grid">
     <div class="panel">
@@ -433,6 +441,29 @@ const char kPage[] = R"PAGE(<!doctype html>
 <script>
 const $=id=>document.getElementById(id);
 let D=null, seen=new Set(), firstLoad=true;
+// Background lines from /map.json (Natural Earth 1:50m, built into the binary),
+// fetched once. Each line keeps its box, so only those in view are drawn, and the
+// path is rebuilt only when the view moves.
+let OUT=null,outKey="",outD={};
+const OUTSTYLE={state:["var(--state)",.8],lake:["var(--coast)",1],border:["var(--border)",1.1],coast:["var(--coast)",1.2]};
+fetch("/map.json").then(r=>r.json()).then(d=>{const q=d.q;OUT={};
+  for(const [k,ls] of Object.entries(d.layers))OUT[k]=ls.map(e=>{const p=new Float32Array(e.length);
+    let x=e[0],y=e[1],b=[x,y,x,y];p[0]=x/q;p[1]=y/q;
+    for(let i=2;i<e.length;i+=2){x+=e[i];y+=e[i+1];p[i]=x/q;p[i+1]=y/q;
+      if(x<b[0])b[0]=x;if(x>b[2])b[2]=x;if(y<b[1])b[1]=y;if(y>b[3])b[3]=y;}
+    return {p,b:b.map(v=>v/q)};});
+  if(D)render();}).catch(()=>{});
+function outlines(s,X,Y,lo0,la0,lo1,la1){
+  if(!OUT)return;const key=[lo0,la0,lo1,la1,X(lo1),Y(la0)].map(v=>v.toFixed(4)).join();
+  if(key!==outKey){outKey=key;outD={};
+    for(const k in OUTSTYLE){let d="";
+      for(const l of OUT[k]||[]){const b=l.b,p=l.p;if(b[2]<lo0||b[0]>lo1||b[3]<la0||b[1]>la1)continue;
+        d+="M"+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1);
+        for(let i=2;i<p.length;i+=2)d+="L"+X(p[i]).toFixed(1)+" "+Y(p[i+1]).toFixed(1);}
+      outD[k]=d;}}
+  for(const k in OUTSTYLE)if(outD[k])s.appendChild(el("path",{d:outD[k],fill:"none",stroke:OUTSTYLE[k][0],
+    "stroke-width":OUTSTYLE[k][1],"stroke-linejoin":"round"}));
+}
 function esc(s){return (s==null?"":""+s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 function hms(t){const d=new Date(t*1000),p=x=>String(x).padStart(2,"0");
   return p(d.getUTCHours())+":"+p(d.getUTCMinutes())+":"+p(d.getUTCSeconds());}
@@ -517,6 +548,9 @@ function map(now,A){
   for(let g=Math.ceil(la0);g<=la1;g++){if(g%step)continue;
     s.appendChild(el("line",{x1:0,y1:Y(g),x2:W,y2:Y(g),class:"gl"}));
     s.appendChild(el("text",{x:4,y:Y(g)-4,class:"ax"},Math.abs(g)+(g<0?"S":"N")));}
+  // what the box shows, which is wider than the data one way or the other
+  const lonAt=x=>lo0+(x-X(lo0))/(k*sc),latAt=y=>la1-(y-Y(la1))/sc;
+  outlines(s,X,Y,lonAt(0),latAt(H),lonAt(W),latAt(0));
   const S={};st.forEach(x=>S[x.id]=x);
   // a faint line from each aircraft to the station it is talking to
   ac.forEach(a=>{const p=a.track[a.track.length-1],g=S[a.station];if(!g||now-p[0]>1800)return;
@@ -547,6 +581,11 @@ load();setInterval(load,3000);
 </script>
 </body></html>
 )PAGE";
+
+// Natural Earth 1:50m coast, border, state and lake lines (data/outlines.json).
+const char kOutlines[] =
+#include "outlines.inc"
+    ;
 
 }  // namespace
 

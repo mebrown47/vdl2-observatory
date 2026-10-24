@@ -79,12 +79,16 @@ station), and the frame: ACARS with tail, flight, label and text, an XID, or a c
 hearing now, seconds behind the air. It shows:
 
 - aircraft and stations on a map, each aircraft with its track and a line to the station it is
-  talking to;
+  talking to, over coastlines, country and state borders and lakes;
 - the newest messages, the aircraft heard in the last 30 minutes, handoffs, and per-channel counts.
 
 Station positions are estimated as the Observatory does it, from the positions reported since the
 receiver started. The state lives in memory, so it starts empty after a restart; for history, use the
 Observatory. `GET /api/state` returns the same state as JSON.
+
+The map lines are Natural Earth's 1:50m coast, border, state and lake lines, built into the binary
+from `data/outlines.json` (made by `data/build_outlines.py`) and served at `/map.json`, so the page
+needs no internet and loads no tiles. The map frames itself on what the receiver hears.
 
 ## The Observatory
 
@@ -208,4 +212,4 @@ dashboard estimates each station's position instead, from the positions of aircr
 GPL-3.0-or-later (`LICENSE`). The decoder in `third_party/vdl2` is Mike Brown's, under the MIT
 licence of CyberEther, the project it is written for. `acars_position.c` and `waypoint_db.c` come from iridium-sniffer. The fix list combines
 X-Plane's `earth_fix.dat` (GPL-3.0), Global Aviation Waypoints (MIT) and the FAA's fix data
-(public domain).
+(public domain). The map outlines are Natural Earth (public domain).
