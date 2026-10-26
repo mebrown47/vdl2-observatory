@@ -462,34 +462,62 @@ private:
 
 /* ---------- UDP ---------- */
 
+// The feed. At boot the network is often not up yet when the receiver starts,
+// so an address that cannot be resolved or reached is not fatal: the frames go
+// nowhere until a later try, at most every RetrySeconds, gets through.
 class Udp {
 public:
     bool open(const std::string& hostPort) {
         const size_t c = hostPort.rfind(':');
-        if (c == std::string::npos) { fprintf(stderr, "vdl2-sniffer: --udp wants HOST:PORT\n"); return false; }
-        const std::string host = hostPort.substr(0, c), port = hostPort.substr(c + 1);
+        if (c == std::string::npos || c == 0 || c + 1 == hostPort.size()) {
+            fprintf(stderr, "vdl2-sniffer: --udp wants HOST:PORT\n");
+            return false;
+        }
+        hostPort_ = hostPort;
+        if (!connectNow())
+            fprintf(stderr, "vdl2-sniffer: UDP %s: %s; trying again every %d s\n", hostPort_.c_str(),
+                    error_.c_str(), RetrySeconds);
+        return true;
+    }
+    void send(const std::string& s) {
+        if (fd_ < 0) {
+            const time_t now = time(nullptr);
+            if (now - lastTry_ < RetrySeconds) return;
+            if (!connectNow()) return;
+            fprintf(stderr, "vdl2-sniffer: UDP %s: connected\n", hostPort_.c_str());
+        }
+        (void)::send(fd_, s.data(), s.size(), 0);
+    }
+    ~Udp() { if (fd_ >= 0) close(fd_); }
+private:
+    static constexpr int RetrySeconds = 10;
+
+    bool connectNow() {
+        lastTry_ = time(nullptr);
+        const size_t c = hostPort_.rfind(':');
+        const std::string host = hostPort_.substr(0, c), port = hostPort_.substr(c + 1);
         struct addrinfo hints{}, *res = nullptr;
         hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_DGRAM;
         if (getaddrinfo(host.c_str(), port.c_str(), &hints, &res) != 0 || !res) {
-            fprintf(stderr, "vdl2-sniffer: cannot resolve %s\n", hostPort.c_str());
+            error_ = "cannot resolve";
             return false;
         }
-        fd_ = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-        if (fd_ < 0 || connect(fd_, res->ai_addr, res->ai_addrlen) != 0) {
-            fprintf(stderr, "vdl2-sniffer: UDP %s: %s\n", hostPort.c_str(), strerror(errno));
-            freeaddrinfo(res);
-            return false;
+        const int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        const bool ok = fd >= 0 && connect(fd, res->ai_addr, res->ai_addrlen) == 0;
+        if (!ok) {
+            error_ = strerror(errno);
+            if (fd >= 0) close(fd);
+        } else {
+            fd_ = fd;
         }
         freeaddrinfo(res);
-        return true;
+        return ok;
     }
-    void send(const std::string& s) {
-        if (fd_ >= 0) (void)::send(fd_, s.data(), s.size(), 0);
-    }
-    ~Udp() { if (fd_ >= 0) close(fd_); }
-private:
+
+    std::string hostPort_, error_;
     int fd_ = -1;
+    time_t lastTry_ = 0;
 };
 
 /* ---------- RTL-SDR ---------- */
