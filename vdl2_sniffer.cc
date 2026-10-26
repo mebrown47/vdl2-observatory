@@ -110,6 +110,7 @@ struct Options {
     std::string basestation;         // SBS: "PORT" to serve, "HOST:PORT" to push; "" off
     bool basestationFix = false;     // SBS: also positions from a named fix
     int webPort = 0;                 // --web: the live page on this port; 0 off
+    int obsPort = 8891;              // the Observatory the live page links to; 0 no link
     double maxSeconds = 0;
     bool printCentre = false;
     bool raw = false;                // AVLC octets in the JSON, for A/B checks
@@ -138,6 +139,8 @@ static void usage(FILE* out) {
         "      --station-id ID   station id in the JSON\n"
         "      --raw             add the AVLC octets (hex) to the JSON\n"
         "      --archive [DIR]   JSONL archive for the Observatory (default ./archive)\n"
+        "      --observatory-port PORT  the Observatory the live page links to, on the same\n"
+        "                        host (default 8891; 0 = no link)\n"
         "      --web[=PORT]      the live page: aircraft, messages, handoffs and a map, served\n"
         "                        by vdl2-sniffer itself on PORT (default 8889)\n"
         "      --basestation[=PORT]     SBS server on PORT (default 30003, tools connect in)\n"
@@ -211,6 +214,11 @@ static bool parseOptions(int argc, char** argv, Options& o) {
             maybe("8889");
             o.webPort = atoi(val.c_str());
             if (o.webPort <= 0 || o.webPort > 65535) { fprintf(stderr, "vdl2-sniffer: bad --web port %s\n", val.c_str()); return false; }
+        }
+        else if (k == "--observatory-port") {
+            if (!need()) return false;
+            o.obsPort = atoi(val.c_str());
+            if (o.obsPort < 0 || o.obsPort > 65535) { fprintf(stderr, "vdl2-sniffer: bad --observatory-port %s\n", val.c_str()); return false; }
         }
         else if (k == "--max-seconds") { if (!need()) return false; o.maxSeconds = atof(val.c_str()); }
         else if (k == "--waypoints") { if (!need()) return false; o.waypoints = val; }
@@ -713,6 +721,7 @@ int main(int argc, char** argv) {
     if (sbs && basestation_init(o.basestation.c_str()) < 0) return 1;
     LiveWeb::Server web;
     const bool webOn = o.webPort > 0;
+    web.observatoryPort(o.obsPort);
     if (webOn && !web.start(o.webPort, o.channels, o.stationId)) return 1;
     // Fixes named in ACARS text are a last-resort position, as in
     // iridium-sniffer. Without the list that fallback is simply off.

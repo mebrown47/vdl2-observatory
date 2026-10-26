@@ -32,6 +32,8 @@ public:
     // Listen on port (all interfaces). False when the port cannot be bound.
     bool start(int port, const std::vector<double>& channels, const std::string& stationId);
     void stop();
+    // The Observatory's port on the same host, for the page's link to it; 0 no link.
+    void observatoryPort(int port) { obsPort_ = port; }
     ~Server() { stop(); }
 
     // Every decoded frame. Times are epoch seconds of the frame.
@@ -97,6 +99,7 @@ private:
     std::vector<double> channels_;
     std::vector<uint64_t> bursts_, frames_;
     std::string stationId_;
+    int obsPort_ = 8891;
     double started_ = 0, latest_ = 0, lastPrune_ = 0;
     uint64_t nFrames_ = 0, nAcars_ = 0, nXid_ = 0, nPos_ = 0;
 

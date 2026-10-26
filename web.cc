@@ -162,7 +162,8 @@ void Server::prune(double now) {
 std::string Server::stateJson() {
     std::lock_guard<std::mutex> lock(mu_);
     std::string j = "{\"now\":" + num(wallNow(), 1) + ",\"latest\":" + num(latest_, 1) +
-                    ",\"started\":" + num(started_, 1) + ",\"station_id\":" + quote(stationId_);
+                    ",\"started\":" + num(started_, 1) + ",\"station_id\":" + quote(stationId_) +
+                    ",\"observatory_port\":" + std::to_string(obsPort_);
     j += ",\"totals\":{\"frames\":" + std::to_string(nFrames_) + ",\"acars\":" + std::to_string(nAcars_) +
          ",\"xid\":" + std::to_string(nXid_) + ",\"positions\":" + std::to_string(nPos_) + "}";
 
@@ -366,6 +367,12 @@ const char kPage[] = R"PAGE(<!doctype html>
   header h1{font-size:18px;margin:0;font-weight:650}
   header .sub{color:var(--dim);font-size:12.5px}
   header .spacer{flex:1}
+  .nav{display:flex;gap:4px}
+  .nav a{color:var(--dim);text-decoration:none;font-size:13px;padding:4px 11px;
+    border-radius:6px;border:1px solid transparent}
+  .nav a:hover{color:var(--fg)}
+  .nav a.on{color:var(--fg);background:var(--panel2);border-color:var(--line)}
+  .nav a[hidden]{display:none}
   .status{color:var(--dim);font-size:12px}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--good);
     margin-right:5px;vertical-align:middle}
@@ -406,6 +413,7 @@ const char kPage[] = R"PAGE(<!doctype html>
 <body>
 <header>
   <h1>VDL2 live</h1>
+  <nav class="nav"><a href="/" class="on">Live</a><a id="obslink" href="#" hidden>Observatory</a></nav>
   <span class="sub" id="sub">vdl2-sniffer</span>
   <span class="spacer"></span>
   <span class="status" id="status"><span class="dot"></span>loading…</span>
@@ -481,7 +489,10 @@ async function load(){
   try{const r=await fetch("/api/state",{cache:"no-store"});D=await r.json();render();}
   catch(e){$("status").innerHTML='<span class="dot" style="background:var(--warn)"></span>receiver not answering';}
 }
+// The Observatory runs on the same host, on its own port.
+function samehost(port){const h=location.hostname;return location.protocol+"//"+(h.includes(":")?"["+h+"]":h)+":"+port+"/";}
 function render(){
+  const ol=$("obslink");if(D.observatory_port){ol.href=samehost(D.observatory_port);ol.hidden=false;}else ol.hidden=true;
   const now=D.latest||D.now, A={};D.aircraft.forEach(a=>A[a.icao]=a);
   const age=D.latest?D.now-D.latest:null;
   $("status").innerHTML='<span class="dot" style="background:'+(age!=null&&age<300?'var(--good)':'var(--warn)')+

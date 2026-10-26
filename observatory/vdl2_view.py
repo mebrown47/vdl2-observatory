@@ -237,6 +237,7 @@ VDL2_PAGE = r"""<!doctype html>
     border-radius:6px;border:1px solid transparent}
   .nav a:hover{color:var(--fg)}
   .nav a.on{color:var(--fg);background:var(--panel2);border-color:var(--line)}
+  .nav a[hidden]{display:none}
   header .status{color:var(--dim);font-size:12px}
   header .dot{display:inline-block;width:8px;height:8px;border-radius:50%;
     background:var(--good);margin-right:5px;vertical-align:middle}
@@ -288,7 +289,7 @@ VDL2_PAGE = r"""<!doctype html>
 <body>
 <header>
   <h1>VDL2 Observatory</h1>
-  <nav class="nav"><a href="/" class="on">Overview</a><a href="/messages">Messages</a></nav>
+  <nav class="nav"><a href="/" class="on">Overview</a><a href="/messages">Messages</a><a id="livelink" href="#" hidden>Live</a></nav>
   <span class="sub">VHF data link, 136.650–136.975 MHz</span>
   <span class="spacer"></span>
   <div class="controls" id="win">
@@ -352,6 +353,11 @@ VDL2_PAGE = r"""<!doctype html>
   </p>
 </main>
 <script>
+// The live page runs on the same host, on vdl2-sniffer's --web port (server.py
+// --live-port fills it in; 0 = no link).
+const LIVE_PORT=__LIVE_PORT__;
+if(LIVE_PORT){const h=location.hostname,a=document.getElementById("livelink");
+  a.href=location.protocol+"//"+(h.includes(":")?"["+h+"]":h)+":"+LIVE_PORT+"/";a.hidden=false;}
 const NS="http://www.w3.org/2000/svg";
 const CH_COLORS=""" + repr(CHANNEL_COLORS) + r""";
 const SVC_COLORS={acars:"#4aa8ff",cpdlc:"#f778ba",adsc:"#d29922"};

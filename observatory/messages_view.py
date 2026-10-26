@@ -95,6 +95,7 @@ MESSAGES_PAGE = r"""<!doctype html>
     border-radius:6px;border:1px solid transparent}
   .nav a:hover{color:var(--fg)}
   .nav a.on{color:var(--fg);background:var(--panel2);border-color:var(--line)}
+  .nav a[hidden]{display:none}
   main{padding:18px 22px;max-width:1400px;margin:0 auto}
   .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
     gap:12px;margin-bottom:18px}
@@ -191,7 +192,7 @@ MESSAGES_PAGE = r"""<!doctype html>
 <body>
 <header>
   <h1>VDL2 Observatory</h1>
-  <nav class="nav"><a href="/">Overview</a><a href="/messages" class="on">Messages</a></nav>
+  <nav class="nav"><a href="/">Overview</a><a href="/messages" class="on">Messages</a><a id="livelink" href="#" hidden>Live</a></nav>
   <span class="sub">decoded aircraft traffic — per-tail history &amp; CPDLC log</span>
   <span class="spacer"></span>
   <span class="status" id="status"><span class="dot"></span>loading…</span>
@@ -246,6 +247,11 @@ MESSAGES_PAGE = r"""<!doctype html>
   </p>
 </main>
 <script>
+// The live page runs on the same host, on vdl2-sniffer's --web port (server.py
+// --live-port fills it in; 0 = no link).
+const LIVE_PORT=__LIVE_PORT__;
+if(LIVE_PORT){const h=location.hostname,a=document.getElementById("livelink");
+  a.href=location.protocol+"//"+(h.includes(":")?"["+h+"]":h)+":"+LIVE_PORT+"/";a.hidden=false;}
 let TAIL=null, VIEW="tails", DATA=null;
 
 function fmt(n){if(n>=1e6)return (n/1e6).toFixed(1)+"M";

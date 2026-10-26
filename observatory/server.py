@@ -37,10 +37,13 @@ DB_PATH = "observatory/observatory.db"
 OUTLINES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "outlines.json")
 # iridium-sniffer's Observatory uses 8890, so both can run on one machine.
 PORT = 8891
+# vdl2-sniffer's live page (--web), which the pages link to on the same host.
+LIVE_PORT = 8889
 
 
 class Handler(BaseHTTPRequestHandler):
     db_path = DB_PATH
+    live_port = LIVE_PORT
     server_version = "vdl2-observatory"
 
     def log_message(self, *a):
@@ -57,6 +60,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
+    def _page(self, html):
+        return html.replace("__LIVE_PORT__", str(self.live_port))
+
     def _json(self, build, *a):
         try:
             self._send(200, json.dumps(build(*a)), "application/json")
@@ -67,12 +73,12 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         q = parse_qs(u.query)
         if u.path == "/":
-            self._send(200, vdl2_view.VDL2_PAGE, "text/html; charset=utf-8")
+            self._send(200, self._page(vdl2_view.VDL2_PAGE), "text/html; charset=utf-8")
         elif u.path == "/api/vdl2":
             self._json(vdl2_view.build_vdl2, self.db_path,
                        q.get("hours", [None])[0])
         elif u.path == "/messages":
-            self._send(200, messages_view.MESSAGES_PAGE,
+            self._send(200, self._page(messages_view.MESSAGES_PAGE),
                        "text/html; charset=utf-8")
         elif u.path == "/api/messages":
             tail = q.get("tail", [None])[0] or None
@@ -103,9 +109,12 @@ def main():
     ap.add_argument("--db", default=DB_PATH)
     ap.add_argument("--port", type=int, default=PORT)
     ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--live-port", type=int, default=LIVE_PORT,
+                    help="vdl2-sniffer's live page on this host, for the link to it (0 = no link)")
     args = ap.parse_args()
 
     Handler.db_path = args.db
+    Handler.live_port = args.live_port
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"vdl2 observatory: http://{args.host}:{args.port}/  db={args.db}")
     try:

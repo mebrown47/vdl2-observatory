@@ -93,6 +93,7 @@ Other rates and centres are mixed and resampled, so 2.5 MS/s from an Airspy R2 a
 | `--udp HOST:PORT` | the same JSON over UDP (acarshub, airframes) |
 | `--archive [DIR]` | `vdl2-YYYYMMDD.jsonl` for the Observatory (default `./archive`) |
 | `--web[=PORT]` | the live page, served by vdl2-sniffer itself on PORT (default 8889): no Python, no database |
+| `--observatory-port PORT` | the Observatory port the live page links to, on the same host (default 8891; 0 = no link) |
 | `--basestation[=PORT]` | BaseStation (SBS) `MSG,3` positions for tar1090, VRS and the like: a server on PORT (default 30003) that tools connect to, or `--basestation=HOST:PORT` to push to one (reconnects by itself) |
 | `--basestation-fix` | also send positions taken from a named fix (off by default: the aircraft may be well past it) |
 | `--waypoints FILE` | fix list for positions from ACARS text (default: the installed `waypoints.csv`; `none` turns the fallback off) |

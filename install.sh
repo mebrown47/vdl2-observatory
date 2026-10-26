@@ -431,7 +431,7 @@ User=$RUN_USER
 $GROUPS_LINE
 EnvironmentFile=$CONF
 WorkingDirectory=$DATA_DIR
-ExecStart=$PREFIX/bin/vdl2-sniffer \$VDL2_ARGS --web=\${WEB_PORT} --archive $ARCHIVE_DIR
+ExecStart=$PREFIX/bin/vdl2-sniffer \$VDL2_ARGS --web=\${WEB_PORT} --observatory-port=\${OBS_PORT} --archive $ARCHIVE_DIR
 Restart=always
 RestartSec=10
 
@@ -448,7 +448,7 @@ After=network.target
 Type=simple
 User=$RUN_USER
 EnvironmentFile=$CONF
-ExecStart=$PY $PREFIX/observatory/server.py --db $DB_PATH --port \${OBS_PORT} --host 0.0.0.0
+ExecStart=$PY $PREFIX/observatory/server.py --db $DB_PATH --port \${OBS_PORT} --live-port \${WEB_PORT} --host 0.0.0.0
 Restart=always
 RestartSec=10
 
