@@ -14,16 +14,51 @@ was among them.
 vdl2-sniffer began as part of [iridium-observatory](https://github.com/mebrown47/iridium-observatory)
 and now stands alone; it needs no Iridium hardware or software.
 
+## Install
+
+On Debian, Ubuntu or Raspberry Pi OS, with an RTL-SDR plugged in:
+
+```bash
+git clone https://github.com/mebrown47/vdl2-observatory.git
+cd vdl2-observatory
+./install.sh
+```
+
+Run it as your normal user; it uses sudo when it needs to. It installs the packages (and builds
+libacars from source where the distro has none), builds and tests vdl2-sniffer, lets the plugdev
+group open the dongle, asks a few questions (which dongle, channel plan, gain, a feed and station
+id), and installs three services that start at boot:
+
+| Service | What it is |
+| --- | --- |
+| `vdl2-sniffer` | the receiver, with the live page on 8889 |
+| `vdl2-rollup.timer` | folds the archive into the Observatory database every minute |
+| `vdl2-observatory` | the VDL2 Observatory dashboard on 8891 |
+
+Settings live in `/etc/vdl2-observatory.conf` (`sudo systemctl restart vdl2-sniffer` after an
+edit); program files in `/opt/vdl2-observatory`; the archive and database in
+`/var/lib/vdl2-observatory`. Later:
+
+```bash
+./install.sh --update        # git pull, rebuild, test, reinstall, restart
+./install.sh --reconfigure   # ask the questions again
+./install.sh --uninstall     # remove services and program files; settings and data stay
+./install.sh --dry-run       # show what it would do as root, change nothing
+```
+
+A receiver set up by hand with the user units in `systemd/` is taken over: the installer offers its
+settings, copies its archive, and stops and removes its user units (keeping copies).
+
 ## Build
 
 ```bash
-sudo apt install build-essential cmake pkg-config
+sudo apt install build-essential cmake pkg-config librtlsdr-dev rtl-sdr
 cmake -B build
 cmake --build build -j
 sudo cmake --install build      # optional: /usr/local/bin and the fix list
 ```
 
-libacars-2 is optional. With it, multi-block ACARS messages are reassembled and FANS-1/A (CPDLC,
+`rtl-sdr` brings the udev rules that let the plugdev group open the dongle. libacars-2 is optional. With it, multi-block ACARS messages are reassembled and FANS-1/A (CPDLC,
 ADS-C) and MIAM are decoded. Without it, the engine still decodes and logs every ACARS block.
 
 ## Run
@@ -114,9 +149,9 @@ python3 observatory/server.py --db observatory/observatory.db      # http://HOST
 timer or cron. The server reads the database only and never talks to vdl2-sniffer. Port 8891 is
 chosen so that it can sit beside iridium-observatory's dashboard on 8890.
 
-## Running as a service
+## Running as a service by hand
 
-`systemd/` has user units for a receiver that runs on its own: `vdl2-sniffer.service` (the RTL-SDR,
+`install.sh` is the easy way. Without it, `systemd/` has user units for a receiver that runs on its own: `vdl2-sniffer.service` (the RTL-SDR,
 restarted if it stops), `vdl2-rollup.timer` (the rollup every minute) and `vdl2-observatory.service`
 (the dashboard on 8891). They expect the checkout at `~/vdl2-sniffer` and need no root:
 
@@ -199,8 +234,8 @@ dashboard estimates each station's position instead, from the positions of aircr
 
 ## Known gaps
 
-- Direct input from RTL-SDR only (`--rtlsdr`); other receivers come through stdin (`airspy_rx`).
-- No installer yet.
+- Direct input from RTL-SDR only (`--rtlsdr`, and so the installer); other receivers come through stdin
+  (`airspy_rx`).
 - `sig_level` and `noise_level` are not in the JSON. The receiver measures SNR only, which is in
   `snr`.
 - The air/ground status bit is read but untested: no capture has an aircraft on the ground.

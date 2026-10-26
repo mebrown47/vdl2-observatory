@@ -4,3 +4,5 @@ observatory/*.db
 observatory/*.db-shm
 observatory/*.db-wal
 archive/
+build-install/
+build-install.log
