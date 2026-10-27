@@ -28,11 +28,16 @@ file(READ ${CMAKE_CURRENT_SOURCE_DIR}/data/outlines.json VDL2_OUTLINES)
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/outlines.inc.tmp "R\"NEOUT(${VDL2_OUTLINES})NEOUT\"\n")
 configure_file(${CMAKE_CURRENT_BINARY_DIR}/outlines.inc.tmp ${CMAKE_CURRENT_BINARY_DIR}/outlines.inc COPYONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/data/outlines.json)
+# Its fingerprint goes in the page's request for it (/map.json?v=...), so a
+# browser holding an older copy fetches the new one.
+file(MD5 ${CMAKE_CURRENT_SOURCE_DIR}/data/outlines.json VDL2_OUTLINES_MD5)
+string(SUBSTRING ${VDL2_OUTLINES_MD5} 0 10 VDL2_MAP_VERSION)
 # The fix list when vdl2-sniffer runs from the build tree; an installed
 # binary finds its own copy in ../share/vdl2-sniffer first.
 target_compile_definitions(vdl2-sniffer PRIVATE
     VDL2_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
-    VDL2_SNIFFER_VERSION="${PROJECT_VERSION}")
+    VDL2_SNIFFER_VERSION="${PROJECT_VERSION}"
+    VDL2_MAP_VERSION="${VDL2_MAP_VERSION}")
 target_link_libraries(vdl2-sniffer PRIVATE Threads::Threads)
 
 # libacars-2: multi-block reassembly and FANS-1/A, MIAM decoding (optional)

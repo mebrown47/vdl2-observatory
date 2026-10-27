@@ -376,7 +376,18 @@ void Server::handle(int fd) {
     const bool head = strcmp(method, "HEAD") == 0;
     std::string body, type = "text/plain", status = "200 OK", cache = "no-store";
     if (strcmp(method, "GET") != 0 && !head) { status = "405 Method Not Allowed"; body = "GET only"; }
-    else if (strcmp(path, "/") == 0) { body = kPage; type = "text/html; charset=utf-8"; }
+    else if (strcmp(path, "/") == 0) {
+        // The map file's fingerprint in the page's request for it: a browser that
+        // has an older copy cached fetches the new one.
+        static const std::string page = [] {
+            std::string p = kPage;
+            const std::string mark = "__MAP_V__";
+            for (size_t at; (at = p.find(mark)) != std::string::npos;) p.replace(at, mark.size(), VDL2_MAP_VERSION);
+            return p;
+        }();
+        body = page;
+        type = "text/html; charset=utf-8";
+    }
     else if (strcmp(path, "/api/state") == 0) { body = stateJson(); type = "application/json"; }
     else if (strcmp(path, "/healthz") == 0) body = "ok";
     else if (strcmp(path, "/map.json") == 0) {
@@ -517,7 +528,7 @@ let OUT=null,OUTP=[],outKey="",outD={};
 // fill, stroke, stroke width, in drawing order
 const OUTSTYLE={land:["var(--land)","var(--coast)",1],lake:["var(--water)","var(--coast)",.8],
   state:["none","var(--state)",.8],border:["none","var(--border)",1.1]};
-fetch("/map.json").then(r=>r.json()).then(d=>{const q=d.q;OUT={};
+fetch("/map.json?v=__MAP_V__").then(r=>r.json()).then(d=>{const q=d.q;OUT={};
   for(const [k,ls] of Object.entries(d.layers))OUT[k]=ls.map(e=>{const p=new Float32Array(e.length);
     let x=e[0],y=e[1],b=[x,y,x,y];p[0]=x/q;p[1]=y/q;
     for(let i=2;i<e.length;i+=2){x+=e[i];y+=e[i+1];p[i]=x/q;p[i+1]=y/q;

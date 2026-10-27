@@ -23,6 +23,7 @@ It never talks to vdl2-sniffer; run rollup.py on a timer to keep it current.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -39,6 +40,24 @@ OUTLINES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data"
 PORT = 8891
 # vdl2-sniffer's live page (--web), which the pages link to on the same host.
 LIVE_PORT = 8889
+
+
+def map_version():
+    """The map file's fingerprint, for the page's request for it (/map.json?v=...):
+    a browser holding an older copy fetches the new one. Read again when the file
+    changes, so an update needs no restart."""
+    try:
+        st = os.stat(OUTLINES)
+    except OSError:
+        return "none"
+    key = (st.st_mtime_ns, st.st_size)
+    if _map_v.get("key") != key:
+        with open(OUTLINES, "rb") as f:
+            _map_v.update(key=key, v=hashlib.md5(f.read()).hexdigest()[:10])
+    return _map_v["v"]
+
+
+_map_v = {}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -61,7 +80,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _page(self, html):
-        return html.replace("__LIVE_PORT__", str(self.live_port))
+        return html.replace("__LIVE_PORT__", str(self.live_port)).replace("__MAP_V__", map_version())
 
     def _json(self, build, *a):
         try:

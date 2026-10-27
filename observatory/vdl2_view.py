@@ -443,7 +443,7 @@ let OUT=null,OUTP=[],outKey="",outD={};
 // fill, stroke, stroke width, in drawing order
 const OUTSTYLE={land:["var(--land)","var(--coast)",1],lake:["var(--water)","var(--coast)",.8],
   state:["none","var(--state)",.8],border:["none","var(--border)",1.1]};
-fetch("/map.json").then(r=>r.json()).then(d=>{const q=d.q;OUT={};
+fetch("/map.json?v=__MAP_V__").then(r=>r.json()).then(d=>{const q=d.q;OUT={};
   for(const [k,ls] of Object.entries(d.layers))OUT[k]=ls.map(e=>{const p=new Float32Array(e.length);
     let x=e[0],y=e[1],b=[x,y,x,y];p[0]=x/q;p[1]=y/q;
     for(let i=2;i<e.length;i+=2){x+=e[i];y+=e[i+1];p[i]=x/q;p[i+1]=y/q;
