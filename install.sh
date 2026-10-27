@@ -312,16 +312,18 @@ else
       else warn "'$ppm' is not a whole number — using 0"; fi
     fi
     yes_no "Power an LNA through the dongle's bias tee" n && VDL2_ARGS+=" --bias-tee"
-    # One UDP feed: an aggregator, or a local acarshub, in dumpvdl2's JSON.
-    feed="$(ask "Feed frames over UDP to an aggregator or acarshub, HOST:PORT (blank for none)" "")"
-    if [ -n "$feed" ]; then
-      if [[ "$feed" =~ ^[^:/[:space:]]+:[0-9]+$ ]]; then
-        VDL2_ARGS+=" --udp $feed"
-        st="$(ask "Station ID for that feed (blank for none)" "")"
-        [ -n "$st" ] && VDL2_ARGS+=" --station-id $st"
-      else
-        warn "skipping '$feed' — expected HOST:PORT"
-      fi
+    # UDP feeds, in dumpvdl2's JSON: aggregators and a local acarshub, any mix,
+    # all on one --udp. vdl2-sniffer takes 8 at most.
+    UDP=""; nfeed=0
+    for f in $(ask "Feed frames over UDP: HOST:PORT destinations, space-separated (blank for none)" "" | tr ',' ' '); do
+      if ! [[ "$f" =~ ^[^:/[:space:]]+:[0-9]+$ ]]; then warn "skipping '$f' — expected HOST:PORT"; continue; fi
+      if [ "$nfeed" -ge 8 ]; then warn "skipping '$f' — at most 8 destinations"; continue; fi
+      UDP+=" $f"; nfeed=$((nfeed+1))
+    done
+    if [ "$nfeed" -gt 0 ]; then
+      VDL2_ARGS+=" --udp$UDP"
+      st="$(ask "Station ID for your feeds (blank for none)" "")"
+      [ -n "$st" ] && VDL2_ARGS+=" --station-id $st"
     fi
     # SBS: a port to serve on, or HOST:PORT to push to.
     sbs="$(ask "Aircraft positions as SBS/BaseStation: a port to serve, HOST:PORT to push (blank for none)" "")"

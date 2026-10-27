@@ -103,7 +103,7 @@ struct Options {
     std::vector<double> channels;
     std::string start;               // capture start for files
     std::string json;                // "" off, "-" stdout, else a file
-    std::string udp;                 // host:port
+    std::vector<std::string> udp;    // HOST:PORT feeds
     std::string stationId;
     std::string archive;             // "" off
     std::string waypoints;           // fix list; "" = the installed one, "none" = off
@@ -135,8 +135,9 @@ static void usage(FILE* out) {
         "                        or YYYY-MM-DDTHH:MM:SSZ (default: now on stdin,\n"
         "                        file mtime minus its length for a file)\n"
         "      --json [FILE]     dumpvdl2-style JSON per frame to FILE (default stdout)\n"
-        "      --udp HOST:PORT   the same JSON over UDP\n"
-        "      --station-id ID   station id in the JSON\n"
+        "      --udp HOST:PORT [HOST:PORT ...]  the same JSON over UDP to each destination\n"
+        "                        (up to 8; --udp may also be repeated)\n"
+        "      --station-id ID   station id in the JSON (also --station)\n"
         "      --raw             add the AVLC octets (hex) to the JSON\n"
         "      --archive [DIR]   JSONL archive for the Observatory (default ./archive)\n"
         "      --observatory-port PORT  the Observatory the live page links to, on the same\n"
@@ -204,9 +205,22 @@ static bool parseOptions(int argc, char** argv, Options& o) {
         else if (k == "--print-centre" || k == "--print-center") o.printCentre = true;
         else if (k == "--start") { if (!need()) return false; o.start = val; }
         else if (k == "--json") { maybe("-"); o.json = val; }
-        else if (k == "--udp") { if (!need()) return false; o.udp = val; }
+        else if (k == "--udp") {
+            // one or more destinations: every argument up to the next option
+            // (commas work too)
+            if (!need()) return false;
+            auto add = [&](const std::string& v) {
+                for (size_t p = 0; p <= v.size();) {
+                    const size_t q = std::min(v.find(',', p), v.size());
+                    if (q > p) o.udp.push_back(v.substr(p, q - p));
+                    p = q + 1;
+                }
+            };
+            add(val);
+            while (!hasVal && i + 1 < argc && argv[i + 1][0] != '-') add(argv[++i]);
+        }
         else if (k == "--raw") o.raw = true;
-        else if (k == "--station-id") { if (!need()) return false; o.stationId = val; }
+        else if (k == "--station-id" || k == "--station") { if (!need()) return false; o.stationId = val; }
         else if (k == "--archive") { maybe("archive"); o.archive = val; }
         else if (k == "--basestation") { maybe("30003"); o.basestation = val; }
         else if (k == "--basestation-fix") o.basestationFix = true;
@@ -473,12 +487,14 @@ private:
 // The feed. At boot the network is often not up yet when the receiver starts,
 // so an address that cannot be resolved or reached is not fatal: the frames go
 // nowhere until a later try, at most every RetrySeconds, gets through.
+constexpr size_t MaxFeeds = 8;
+
 class Udp {
 public:
     bool open(const std::string& hostPort) {
         const size_t c = hostPort.rfind(':');
         if (c == std::string::npos || c == 0 || c + 1 == hostPort.size()) {
-            fprintf(stderr, "vdl2-sniffer: --udp wants HOST:PORT\n");
+            fprintf(stderr, "vdl2-sniffer: --udp wants HOST:PORT, not '%s'\n", hostPort.c_str());
             return false;
         }
         hostPort_ = hostPort;
@@ -494,7 +510,7 @@ public:
             if (!connectNow()) return;
             fprintf(stderr, "vdl2-sniffer: UDP %s: connected\n", hostPort_.c_str());
         }
-        (void)::send(fd_, s.data(), s.size(), 0);
+        (void)::send(fd_, s.data(), s.size(), MSG_DONTWAIT);
     }
     ~Udp() { if (fd_ >= 0) close(fd_); }
 private:
@@ -713,8 +729,12 @@ int main(int argc, char** argv) {
     FILE* jsonOut = nullptr;
     if (o.json == "-") jsonOut = stdout;
     else if (!o.json.empty() && !(jsonOut = fopen(o.json.c_str(), "a"))) { perror(o.json.c_str()); return 1; }
-    Udp udp;
-    if (!o.udp.empty() && !udp.open(o.udp)) return 1;
+    if (o.udp.size() > MaxFeeds) { fprintf(stderr, "vdl2-sniffer: at most %zu --udp destinations\n", MaxFeeds); return 1; }
+    std::vector<std::unique_ptr<Udp>> feeds;
+    for (const auto& d : o.udp) {
+        feeds.emplace_back(new Udp);
+        if (!feeds.back()->open(d)) return 1;
+    }
     Archive archive;
     if (!o.archive.empty() && !archive.open(o.archive)) return 1;
     const bool sbs = !o.basestation.empty();
@@ -945,7 +965,7 @@ int main(int argc, char** argv) {
             }
             j += "}}";
             if (jsonOut) { fputs(j.c_str(), jsonOut); fputc('\n', jsonOut); fflush(jsonOut); }
-            udp.send(j + "\n");
+            for (auto& u : feeds) u->send(j + "\n");
         }
 
         // archive

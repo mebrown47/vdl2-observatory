@@ -90,7 +90,8 @@ Other rates and centres are mixed and resampled, so 2.5 MS/s from an Airspy R2 a
 | `--plan us\|eu`, `--channels LIST` | channel plan, or channels in MHz or Hz |
 | `--start TIME` | capture start for a file: epoch, `YYYY-MM-DD HH:MM:SS` local, or `...Z` UTC. Default: the file's mtime minus its length |
 | `--json [FILE]` | one dumpvdl2-style JSON object per frame (stdout by default); `--raw` adds the AVLC octets. XID frames use dumpvdl2's layout (`pub_params`, `vdl_params`), which feed parsers such as acars_router require; on the ten captures every frame passes acars_vdlm2_parser |
-| `--udp HOST:PORT` | the same JSON over UDP (acarshub, airframes) |
+| `--udp HOST:PORT [HOST:PORT ...]` | the same JSON over UDP to each destination, such as a local acarshub and an aggregator: `--udp 127.0.0.1:5555 feed.example.net:5552`. Up to 8; commas or a repeated `--udp` work too. A destination that can't be reached yet (at boot, say) is tried again every 10 s |
+| `--station-id ID` | station id in the JSON (also `--station`) |
 | `--archive [DIR]` | `vdl2-YYYYMMDD.jsonl` for the Observatory (default `./archive`) |
 | `--web[=PORT]` | the live page, served by vdl2-sniffer itself on PORT (default 8889): no Python, no database |
 | `--observatory-port PORT` | the Observatory port the live page links to, on the same host (default 8891; 0 = no link) |
