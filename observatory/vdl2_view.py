@@ -509,6 +509,11 @@ function stationMap(host,all,pos){
   const k=Math.cos((la0+la1)/2*Math.PI/180);
   const pad=Math.max(0.3,(la1-la0)*0.08,(lo1-lo0)*k*0.08);
   la0-=pad;la1+=pad;lo0-=pad/k;lo1+=pad/k;
+  // at least 2 degrees north-south (and as much east-west), so one aircraft
+  // still shows the towns and coast around it
+  const MIN=2;
+  if(la1-la0<MIN){const c=(la0+la1)/2;la0=c-MIN/2;la1=c+MIN/2;}
+  if((lo1-lo0)*k<MIN){const c=(lo0+lo1)/2;lo0=c-MIN/2/k;lo1=c+MIN/2/k;}
   const W=Math.max(240,host.clientWidth||900);
   const H=Math.round(Math.max(280,Math.min(560,W*(la1-la0)/((lo1-lo0)*k))));
   const sc=Math.min(W/((lo1-lo0)*k),H/(la1-la0));
