@@ -713,6 +713,8 @@ void Decoder::tryBurst(Channel& c, std::uint64_t from, std::uint64_t to,
                     f.errorsCorrected = corrected;
                     f.erasuresUsed = erased;
                     f.avlc = cand;
+                    // radians per symbol to ppm of the channel frequency
+                    f.ppm = static_cast<float>(freq * SymbolRate / (2 * Pi * c.frequency) * 1e6);
                     if (ParseAvlc(cand, f)) got.push_back(std::move(f));
                     break;
                 }

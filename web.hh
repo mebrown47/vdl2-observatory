@@ -36,8 +36,16 @@ public:
     void observatoryPort(int port) { obsPort_ = port; }
     ~Server() { stop(); }
 
-    // Every decoded frame. Times are epoch seconds of the frame.
-    void frame(double t, double freq, float snr, uint32_t src, int srcKind, uint32_t dst, int dstKind);
+    // Every decoded frame. Times are epoch seconds of the frame; ppm is its carrier
+    // offset from the channel (Frame::ppm).
+    void frame(double t, double freq, float snr, uint32_t src, int srcKind, uint32_t dst, int dstKind,
+               float ppm);
+    // What the samples come from, for the Receiver panel. ppm < -1000: not an RTL-SDR,
+    // so there is no --ppm to suggest.
+    void receiver(const std::string& device, const std::string& tuner, const std::string& gain, int ppm,
+                  bool biasTee, double centre, double rate);
+    // Samples read and samples dropped (decoder behind) since the start.
+    void input(uint64_t samples, uint64_t dropped);
     // An ACARS message (one per frame; a multi-block message as each block arrives).
     void acars(double t, double freq, uint32_t aircraft, uint32_t station, bool fromAircraft,
                const std::string& reg, const std::string& flight, const std::string& label,
@@ -63,6 +71,7 @@ private:
         float snr = 0, bestSnr = -1e9f;
         uint64_t frames = 0, acars = 0;
         std::deque<Fix> track;       // newest last, a few entries
+        std::deque<float> skew;      // ppm of its own recent frames, newest last
     };
     struct Sample { double lat, lon, w; bool target; };
     struct Station {
@@ -99,6 +108,11 @@ private:
     std::vector<double> channels_;
     std::vector<uint64_t> bursts_, frames_;
     std::string stationId_;
+    std::string device_, tuner_, gain_;
+    int ppm_ = -10000;
+    bool biasTee_ = false;
+    double centre_ = 0, rate_ = 0;
+    uint64_t samples_ = 0, dropped_ = 0;
     int obsPort_ = 8891;
     double started_ = 0, latest_ = 0, lastPrune_ = 0;
     uint64_t nFrames_ = 0, nAcars_ = 0, nXid_ = 0, nPos_ = 0;

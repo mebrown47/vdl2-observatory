@@ -6,20 +6,25 @@ Rebuild data/outlines.json, the background lines on the live page's map.
 
     build_outlines.py NE_DIR [--out data/outlines.json]
 
-NE_DIR holds four Natural Earth 1:50m GeoJSON files, from
+NE_DIR holds these Natural Earth GeoJSON files, from
 github.com/nvkelso/natural-earth-vector (geojson/), public domain:
 
-    ne_50m_coastline.geojson                  -> coast
+    ne_50m_land.geojson                       -> land (rings: filled, and the coast)
     ne_50m_admin_0_boundary_lines_land.geojson -> border (between countries)
     ne_50m_admin_1_states_provinces_lines.geojson -> state
-    ne_50m_lakes.geojson                      -> lake (outlines only)
+    ne_50m_lakes.geojson                      -> lake (rings)
+    ne_10m_populated_places_simple.geojson    -> places (towns to read the map by)
 
 Every line is rounded to 0.01 degree (about 1 km, finer than the page
 draws), points that round onto the one before are dropped, and each line
 is written as integers: the first point in hundredths of a degree, then
 the steps between points, lon before lat:
 
-    {"q": 100, "layers": {"coast": [[lon0, lat0, dlon, dlat, ...], ...], ...}}
+    {"q": 100, "layers": {"land": [[lon0, lat0, dlon, dlat, ...], ...], ...},
+     "places": [[lon, lat, rank, "name"], ...]}
+
+Places keep Natural Earth's scalerank (0 the biggest), so the page can show
+only the bigger ones when it shows a big area. Ranks 9 and 10 are left out.
 
 Running it again on the same files gives the same output.
 """
@@ -30,12 +35,14 @@ import os
 import sys
 
 LAYERS = [
-    ("coast", "ne_50m_coastline.geojson"),
+    ("land", "ne_50m_land.geojson"),
     ("border", "ne_50m_admin_0_boundary_lines_land.geojson"),
     ("state", "ne_50m_admin_1_states_provinces_lines.geojson"),
     ("lake", "ne_50m_lakes.geojson"),
 ]
 Q = 100
+PLACES = "ne_10m_populated_places_simple.geojson"
+MAX_PLACE_RANK = 8
 
 
 def lines(geom):
@@ -79,9 +86,19 @@ def main():
         layers[name] = sorted(enc)
         print(f"{name}: {len(enc)} lines, {sum(len(e) for e in enc) // 2} points", file=sys.stderr)
 
-    doc = {"source": "Natural Earth 1:50m, public domain (naturalearthdata.com)", "q": Q, "layers": layers}
-    with open(args.out, "w") as f:
-        json.dump(doc, f, separators=(",", ":"))
+    places = []
+    with open(os.path.join(args.ne_dir, PLACES)) as f:
+        for ft in json.load(f)["features"]:
+            pr, (lon, lat) = ft["properties"], ft["geometry"]["coordinates"][:2]
+            if pr.get("scalerank", 99) <= MAX_PLACE_RANK and pr.get("name"):
+                places.append([round(lon * Q), round(lat * Q), pr["scalerank"], pr["name"]])
+    places.sort(key=lambda p: (p[2], p[3], p[0], p[1]))
+    print(f"places: {len(places)}", file=sys.stderr)
+
+    doc = {"source": "Natural Earth, public domain (naturalearthdata.com)", "q": Q, "layers": layers,
+           "places": places}
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(doc, f, separators=(",", ":"), ensure_ascii=False)
         f.write("\n")
     print(f"{args.out}: {os.path.getsize(args.out)} bytes", file=sys.stderr)
 

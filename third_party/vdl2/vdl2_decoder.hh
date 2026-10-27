@@ -37,6 +37,10 @@ struct Frame {
     // ramp symbol and the end of its last data symbol, from the unique word's position and the
     // header's transmission length. Every frame of one burst carries the same two.
     double burstFirst = 0.0, burstLast = 0.0;
+    // (vdl2-sniffer addition) The burst's carrier offset from the channel, in ppm of the
+    // channel frequency, from the phase drift across the unique word: dumpvdl2's
+    // freq_skew. Averaged over many aircraft it is the receiver's own tuning error.
+    float ppm = 0.0f;
 };
 
 class Decoder {

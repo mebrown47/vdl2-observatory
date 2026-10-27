@@ -556,6 +556,7 @@ private:
 class RtlInput {
 public:
     std::atomic<uint64_t> dropped{0};   // bytes
+    std::string device, tuner, gain;    // for the live page
     std::atomic<bool> failed{false};    // the device stopped without being asked
 
     FILE* open(const Options& o) {
@@ -602,6 +603,11 @@ public:
         if (pipe2(fd_, O_CLOEXEC) < 0) { perror("pipe"); return nullptr; }
         fcntl(fd_[1], F_SETPIPE_SZ, 1 << 20);   // about half a second at 1.05 MS/s
         pipeSize_ = fcntl(fd_[1], F_GETPIPE_SZ);
+        static const char* tuners[] = {"unknown", "E4000", "FC0012", "FC0013", "FC2580", "R820T", "R828D"};
+        const int tt = (int)rtlsdr_get_tuner_type(dev_);
+        tuner = tt >= 0 && tt < 7 ? tuners[tt] : "unknown";
+        device = std::string("RTL-SDR ") + product + (serial[0] ? std::string(", serial ") + serial : "");
+        gain = gainText;
         fprintf(stderr, "vdl2-sniffer: RTL-SDR %d (%s %s, serial %s), gain %s, %d ppm, bias tee %s\n",
                 idx, vendor, product, serial, gainText.c_str(), o.ppm, o.biasTee ? "on" : "off");
         th_ = std::thread([this] {
@@ -742,6 +748,12 @@ int main(int argc, char** argv) {
     LiveWeb::Server web;
     const bool webOn = o.webPort > 0;
     web.observatoryPort(o.obsPort);
+#ifdef HAVE_RTLSDR
+    if (live) web.receiver(rtl.device, rtl.tuner, rtl.gain, o.ppm, o.biasTee, o.centre, o.rate);
+    else
+#endif
+        web.receiver((o.input == "-" ? std::string("stdin") : o.input) + ", " + o.format, "", "", -10000,
+                     false, o.centre, o.rate);
     if (webOn && !web.start(o.webPort, o.channels, o.stationId)) return 1;
     // Fixes named in ACARS text are a last-resort position, as in
     // iridium-sniffer. Without the list that fallback is simply off.
@@ -858,7 +870,7 @@ int main(int argc, char** argv) {
 
         // the live page
         if (webOn) {
-            web.frame(t, f.frequency, f.snr, f.source, f.sourceKind, f.dest, f.destKind);
+            web.frame(t, f.frequency, f.snr, f.source, f.sourceKind, f.dest, f.destKind, f.ppm);
             const bool acSide = f.sourceKind == 1 || f.destKind == 1;
             const uint32_t aircraft = fromAircraft ? f.source : f.dest, station = fromAircraft ? f.dest : f.source;
             if (ac && acSide)
@@ -911,11 +923,11 @@ int main(int argc, char** argv) {
             snprintf(b, sizeof b,
                      "{\"vdl2\":{\"app\":{\"name\":\"vdl2-sniffer\",\"ver\":\"%s\"},%s"
                      "\"t\":{\"sec\":%llu,\"usec\":%llu},\"freq\":%.0f,\"idx\":%zu,\"burst_len_octets\":%zu,"
-                     "\"octets_corrected_by_fec\":%d,\"snr\":%.1f,\"avlc\":{",
+                     "\"octets_corrected_by_fec\":%d,\"snr\":%.1f,\"freq_skew\":%.1f,\"avlc\":{",
                      VDL2_SNIFFER_VERSION,
                      o.stationId.empty() ? "" : ("\"station\":" + jsonQuote(o.stationId) + ",").c_str(),
                      (unsigned long long)(tUs / 1000000), (unsigned long long)(tUs % 1000000), f.frequency, ci,
-                     f.avlc.size(), f.errorsCorrected, f.snr);
+                     f.avlc.size(), f.errorsCorrected, f.snr, f.ppm);
             std::string j = b;
             j += "\"src\":" + party(f.source, f.sourceKind, fromAircraft);
             j += ",\"dst\":" + party(f.dest, f.destKind, f.destKind == 1);
@@ -973,10 +985,10 @@ int main(int argc, char** argv) {
             char b[384];
             snprintf(b, sizeof b,
                      "{\"e\":\"vframe\",\"t\":%llu,\"freq\":%.0f,\"snr\":%.1f,\"src\":\"%s\",\"sk\":%d,"
-                     "\"dst\":\"%s\",\"dk\":%d,\"cr\":%d,\"ctl\":\"%s\",\"len\":%zu,\"rs\":%d,\"er\":%d}",
+                     "\"dst\":\"%s\",\"dk\":%d,\"cr\":%d,\"ctl\":\"%s\",\"len\":%zu,\"rs\":%d,\"er\":%d,\"fs\":%.2f}",
                      (unsigned long long)tMs, f.frequency, f.snr, hex6(f.source).c_str(), f.sourceKind,
                      hex6(f.dest).c_str(), f.destKind, response ? 1 : 0, ac ? "ACARS" : ctl.type.c_str(),
-                     f.avlc.size(), f.errorsCorrected, f.erasuresUsed);
+                     f.avlc.size(), f.errorsCorrected, f.erasuresUsed, f.ppm);
             archive.write(tMs, b);
             // A position from ACARS text, logged per frame: a multi-block
             // message whose later blocks never arrive is never logged whole,
@@ -1131,6 +1143,7 @@ int main(int argc, char** argv) {
             std::vector<uint64_t> wb, wf;
             for (auto& st : stats) { wb.push_back(st.bursts); wf.push_back(st.frames); }
             web.channels(wb, wf);
+            web.input(inCount, droppedSamples);
         }
     }
     flushMinute();

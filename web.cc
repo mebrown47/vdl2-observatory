@@ -75,7 +75,8 @@ extern const char kOutlines[];
 
 /* ---------- what the engine reports ---------- */
 
-void Server::frame(double t, double freq, float snr, uint32_t src, int srcKind, uint32_t dst, int dstKind) {
+void Server::frame(double t, double freq, float snr, uint32_t src, int srcKind, uint32_t dst, int dstKind,
+                   float ppm) {
     std::lock_guard<std::mutex> lock(mu_);
     nFrames_++;
     latest_ = std::max(latest_, t);
@@ -89,7 +90,25 @@ void Server::frame(double t, double freq, float snr, uint32_t src, int srcKind, 
     a.frames++;
     a.freq = freq;
     if (up) { a.snr = snr; a.bestSnr = std::max(a.bestSnr, snr); }
+    // An aircraft's own transmission. Beyond 20 ppm (2.7 kHz) it is most likely
+    // a neighbouring channel heard through the filter, not this one.
+    if (up && std::fabs(ppm) < 20) {
+        a.skew.push_back(ppm);
+        if (a.skew.size() > 20) a.skew.pop_front();
+    }
     if (t - lastPrune_ > 60) prune(t);
+}
+
+void Server::receiver(const std::string& device, const std::string& tuner, const std::string& gain,
+                      int ppm, bool biasTee, double centre, double rate) {
+    std::lock_guard<std::mutex> lock(mu_);
+    device_ = device; tuner_ = tuner; gain_ = gain; ppm_ = ppm; biasTee_ = biasTee;
+    centre_ = centre; rate_ = rate;
+}
+
+void Server::input(uint64_t samples, uint64_t dropped) {
+    std::lock_guard<std::mutex> lock(mu_);
+    samples_ = samples; dropped_ = dropped;
 }
 
 void Server::acars(double t, double freq, uint32_t aircraft, uint32_t station, bool fromAircraft,
@@ -174,6 +193,37 @@ std::string Server::stateJson() {
              ",\"frames\":" + std::to_string(i < frames_.size() ? frames_[i] : 0) + "}";
     }
     j += "]";
+
+    // The receiver, and its tuning error: each aircraft's median offset over its own
+    // recent frames, then the median across aircraft, so a chatty one counts once.
+    // Aircraft transmitters are allowed a few ppm each way, and scatter around zero.
+    j += ",\"receiver\":{\"device\":" + quote(device_) + ",\"tuner\":" + quote(tuner_) +
+         ",\"gain\":" + quote(gain_) + ",\"ppm\":" + (ppm_ < -1000 ? std::string("null") : std::to_string(ppm_)) +
+         ",\"bias_tee\":" + (biasTee_ ? "true" : "false") + ",\"centre\":" + num(centre_, 0) +
+         ",\"rate\":" + num(rate_, 0) + ",\"samples\":" + std::to_string(samples_) +
+         ",\"dropped\":" + std::to_string(dropped_);
+    std::vector<float> perAircraft;
+    size_t skewFrames = 0;
+    for (auto& [id, a] : aircraft_) {
+        if (a.skew.size() < 2) continue;
+        std::vector<float> v(a.skew.begin(), a.skew.end());
+        std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+        perAircraft.push_back(v[v.size() / 2]);
+        skewFrames += a.skew.size();
+    }
+    if (perAircraft.size() >= 3) {
+        std::sort(perAircraft.begin(), perAircraft.end());
+        auto q = [&](double f) { return perAircraft[(size_t)std::lround(f * (perAircraft.size() - 1))]; };
+        const double med = q(0.5);
+        j += ",\"skew\":{\"median\":" + num(med, 2) + ",\"p25\":" + num(q(0.25), 2) + ",\"p75\":" +
+             num(q(0.75), 2) + ",\"aircraft\":" + std::to_string(perAircraft.size()) +
+             ",\"frames\":" + std::to_string(skewFrames) + "}";
+        // librtlsdr's correction is how fast the crystal runs; a fast crystal tunes
+        // high and shifts every signal down, so the setting moves against the offset.
+        if (ppm_ >= -1000 && perAircraft.size() >= 10)
+            j += ",\"suggested_ppm\":" + std::to_string(ppm_ - (int)std::lround(med));
+    }
+    j += "}";
 
     std::vector<std::pair<uint32_t, const Aircraft*>> acs;
     for (auto& [id, a] : aircraft_) acs.push_back({id, &a});
@@ -358,7 +408,8 @@ const char kPage[] = R"PAGE(<!doctype html>
 <style>
   :root{--bg:#0e1116;--panel:#161b22;--panel2:#1c232c;--line:#2b333d;--grid:#222a33;
     --fg:#e6edf3;--dim:#8b98a5;--accent:#4aa8ff;--good:#3fb950;--warn:#d29922;--hot:#f778ba;
-    --coast:#3e4c5c;--border:#4a5665;--state:#29323d}
+    --coast:#46566a;--border:#5a6878;--state:#36414e;--land:#1d242d;--water:#141920;--place:#8593a1}
+  .plc{fill:var(--place);font-size:10.5px}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);
     font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
@@ -396,6 +447,9 @@ const char kPage[] = R"PAGE(<!doctype html>
   td{padding:5px 7px;border-bottom:1px solid #1b2129;vertical-align:top;white-space:nowrap}
   td.body{white-space:normal;overflow-wrap:anywhere;min-width:240px}
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .kv td:first-child{color:var(--dim);white-space:nowrap;width:1%;padding-right:14px}
+  .kv td{vertical-align:top}
+  .ok{color:var(--good)}.warnc{color:var(--warn)}
   .n{color:var(--dim);font-variant-numeric:tabular-nums}
   .dir{font-size:10px;padding:1px 5px;border-radius:4px}
   .dir.up{background:#241a2e;color:#a371f7}
@@ -423,7 +477,7 @@ const char kPage[] = R"PAGE(<!doctype html>
   <div class="panel">
     <h2>Map <span class="hint">aircraft positions from handoffs and ACARS text, last hour; stations at the centre of the positions reported to them since the receiver started</span></h2>
     <div id="map"></div>
-    <div class="key"><i style="background:#4aa8ff"></i>ground station<i style="background:#e6edf3;border-radius:50%"></i>aircraft, latest position (fades with age)<i style="background:#8b98a5;height:2px"></i>its track<span style="float:right">outlines: Natural Earth</span></div>
+    <div class="key"><i style="background:#4aa8ff"></i>ground station<i style="background:#e6edf3;border-radius:50%"></i>aircraft, latest position (fades with age)<i style="background:#e3b341;height:2px"></i>its track<span style="float:right">map: Natural Earth</span></div>
   </div>
   <div class="grid">
     <div class="panel">
@@ -440,37 +494,71 @@ const char kPage[] = R"PAGE(<!doctype html>
       <h2>Handoffs <span class="hint">XID frames: the station an aircraft moves to</span></h2>
       <div class="scroll" id="hand"></div>
     </div>
-    <div class="panel">
-      <h2>Channels <span class="hint">since the receiver started</span></h2>
-      <div id="chans"></div>
+    <div>
+      <div class="panel">
+        <h2>Channels <span class="hint">since the receiver started</span></h2>
+        <div id="chans"></div>
+      </div>
+      <div class="panel">
+        <h2>Receiver <span class="hint">the dongle, and how far off frequency it is</span></h2>
+        <div id="rx"></div>
+      </div>
     </div>
   </div>
 </main>
 <script>
 const $=id=>document.getElementById(id);
 let D=null, seen=new Set(), firstLoad=true;
-// Background lines from /map.json (Natural Earth 1:50m, built into the binary),
-// fetched once. Each line keeps its box, so only those in view are drawn, and the
-// path is rebuilt only when the view moves.
-let OUT=null,outKey="",outD={};
-const OUTSTYLE={state:["var(--state)",.8],lake:["var(--coast)",1],border:["var(--border)",1.1],coast:["var(--coast)",1.2]};
+// Background map from /map.json (Natural Earth, data/outlines.json), fetched
+// once: land over water, lakes, state and country lines, and towns to read it by.
+// Each line keeps its box, so only those in view are drawn, and the paths are
+// rebuilt only when the view moves.
+let OUT=null,OUTP=[],outKey="",outD={};
+// fill, stroke, stroke width, in drawing order
+const OUTSTYLE={land:["var(--land)","var(--coast)",1],lake:["var(--water)","var(--coast)",.8],
+  state:["none","var(--state)",.8],border:["none","var(--border)",1.1]};
 fetch("/map.json").then(r=>r.json()).then(d=>{const q=d.q;OUT={};
   for(const [k,ls] of Object.entries(d.layers))OUT[k]=ls.map(e=>{const p=new Float32Array(e.length);
     let x=e[0],y=e[1],b=[x,y,x,y];p[0]=x/q;p[1]=y/q;
     for(let i=2;i<e.length;i+=2){x+=e[i];y+=e[i+1];p[i]=x/q;p[i+1]=y/q;
       if(x<b[0])b[0]=x;if(x>b[2])b[2]=x;if(y<b[1])b[1]=y;if(y>b[3])b[3]=y;}
     return {p,b:b.map(v=>v/q)};});
+  OUTP=(d.places||[]).map(p=>({lon:p[0]/q,lat:p[1]/q,r:p[2],n:p[3]}));
   if(D)render();}).catch(()=>{});
+// The background, clipped to the frame, in a group the town names go into later.
 function outlines(s,X,Y,lo0,la0,lo1,la1){
-  if(!OUT)return;const key=[lo0,la0,lo1,la1,X(lo1),Y(la0)].map(v=>v.toFixed(4)).join();
+  const W=X(lo1),H=Y(la0),cp=el("clipPath",{id:"outclip"});
+  cp.appendChild(el("rect",{x:0,y:0,width:W,height:H}));s.appendChild(cp);
+  const g=el("g",{"clip-path":"url(#outclip)","pointer-events":"none"});s.appendChild(g);
+  if(!OUT)return g;
+  const key=[lo0,la0,lo1,la1,W,H].map(v=>v.toFixed(4)).join();
   if(key!==outKey){outKey=key;outD={};
-    for(const k in OUTSTYLE){let d="";
+    for(const k in OUTSTYLE){let d="";const ring=OUTSTYLE[k][0]!=="none";
       for(const l of OUT[k]||[]){const b=l.b,p=l.p;if(b[2]<lo0||b[0]>lo1||b[3]<la0||b[1]>la1)continue;
         d+="M"+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1);
-        for(let i=2;i<p.length;i+=2)d+="L"+X(p[i]).toFixed(1)+" "+Y(p[i+1]).toFixed(1);}
+        for(let i=2;i<p.length;i+=2)d+="L"+X(p[i]).toFixed(1)+" "+Y(p[i+1]).toFixed(1);
+        if(ring)d+="Z";}
       outD[k]=d;}}
-  for(const k in OUTSTYLE)if(outD[k])s.appendChild(el("path",{d:outD[k],fill:"none",stroke:OUTSTYLE[k][0],
-    "stroke-width":OUTSTYLE[k][1],"stroke-linejoin":"round"}));
+  for(const k in OUTSTYLE)if(outD[k])g.appendChild(el("path",{d:outD[k],fill:OUTSTYLE[k][0],
+    "fill-rule":"evenodd",stroke:OUTSTYLE[k][1],"stroke-width":OUTSTYLE[k][2],"stroke-linejoin":"round"}));
+  return g;
+}
+// Town names, under the data and clear of its labels (boxes): only the bigger
+// towns as the view widens, and no more than 30.
+function placeNames(g,X,Y,lo0,la0,lo1,la1,boxes){
+  const W=X(lo1),H=Y(la0),span=Math.max(lo1-lo0,la1-la0);
+  const maxr=span>40?2:span>20?4:span>10?6:span>5?7:8;
+  const hit=(a,b)=>a[0]<b[0]+b[2]&&b[0]<a[0]+a[2]&&a[1]<b[1]+b[3]&&b[1]<a[1]+a[3];
+  let n=0;
+  for(const p of OUTP){
+    if(p.r>maxr||p.lon<lo0||p.lon>lo1||p.lat<la0||p.lat>la1)continue;
+    const x=X(p.lon),y=Y(p.lat),w=p.n.length*6.1+6,b=[x-3,y-7,w,13];
+    if(b[0]<0||b[1]<0||b[0]+w>W||b[1]+13>H||boxes.some(q=>hit(b,q)))continue;
+    boxes.push(b);
+    g.appendChild(el("circle",{cx:x,cy:y,r:1.7,fill:"var(--place)"}));
+    g.appendChild(el("text",{x:x+4,y:y+3.5,class:"plc"},p.n));
+    if(++n>=30)break;
+  }
 }
 function esc(s){return (s==null?"":""+s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 function hms(t){const d=new Date(t*1000),p=x=>String(x).padStart(2,"0");
@@ -533,7 +621,29 @@ function render(){
     D.channels.map(c=>'<tr><td class="mono">'+(c.freq/1e6).toFixed(3)+'</td><td class="n">'+fmt(c.bursts)+
       '</td><td class="n">'+fmt(c.frames)+'</td><td class="n">'+(c.bursts?Math.round(100*c.frames/c.bursts)+'%':'–')+
       '</td></tr>').join("")+'</table>';
+  receiver();
   firstLoad=false;
+}
+// The Receiver panel. The frequency error is the median, across aircraft heard in
+// the last two hours, of each one's own median offset; aircraft are allowed a few
+// ppm each way, so a single one says little and many say a lot.
+function receiver(){
+  const R=D.receiver||{},rows=[],sg=x=>(x>0?"+":"")+x.toFixed(1);
+  rows.push(["Device",esc(R.device||"–")+(R.tuner?' <span class="n">· '+esc(R.tuner)+' tuner</span>':"")]);
+  if(R.ppm!=null)rows.push(["Gain",esc(R.gain||"–")+' <span class="n">· bias tee '+(R.bias_tee?"on":"off")+'</span>']);
+  rows.push(["Tuned",(R.centre/1e6).toFixed(4)+' MHz <span class="n">· '+(R.rate/1e6).toFixed(2)+' MS/s</span>']);
+  const lost=R.rate?R.dropped/R.rate:0;
+  rows.push(["Dropped",R.dropped?'<span class="warnc">'+lost.toFixed(1)+' s of samples</span> <span class="n">(the decoder fell behind)</span>':'<span class="ok">none</span>']);
+  if(R.ppm!=null)rows.push(["--ppm","<span class=\"mono\">"+R.ppm+"</span>"]);
+  const k=R.skew;
+  rows.push(["Frequency error",k?'<span class="mono">'+sg(k.median)+' ppm</span> <span class="n">· middle half '+sg(k.p25)+' to '+sg(k.p75)+
+    ' · '+k.aircraft+' aircraft, '+k.frames+' frames</span>':'<span class="n">waiting for aircraft (3 needed)</span>']);
+  if(R.ppm!=null){let t;
+    if(R.suggested_ppm==null)t='<span class="n">needs 10 aircraft'+(k?' (have '+k.aircraft+')':'')+'</span>';
+    else if(R.suggested_ppm===R.ppm)t='<span class="ok">--ppm '+R.ppm+' is right</span> <span class="n">(within half a ppm)</span>';
+    else t='<span class="warnc mono">--ppm '+R.suggested_ppm+'</span> <span class="n">(now '+R.ppm+'; restart the receiver after changing it)</span>';
+    rows.push(["Suggested",t]);}
+  $("rx").innerHTML='<table class="kv">'+rows.map(r=>'<tr><td>'+r[0]+'</td><td>'+r[1]+'</td></tr>').join("")+'</table>';
 }
 // Aircraft (dot at the latest position, faint track) and the ground
 // stations they talk to, equirectangular around the data, no tiles.
@@ -551,7 +661,10 @@ function map(now,A){
   const sc=Math.min(W/((lo1-lo0)*k),H/(la1-la0));
   const X=lo=>(lo-lo0)*k*sc+(W-(lo1-lo0)*k*sc)/2,Y=la=>(la1-la)*sc+(H-(la1-la0)*sc)/2;
   host.innerHTML="";const s=el("svg",{viewBox:"0 0 "+W+" "+H,width:W,height:H});host.appendChild(s);
-  s.appendChild(el("rect",{x:0,y:0,width:W,height:H,fill:"none",stroke:"var(--line)"}));
+  s.appendChild(el("rect",{x:0,y:0,width:W,height:H,fill:"var(--water)",stroke:"var(--line)"}));
+  // what the box shows, which is wider than the data one way or the other
+  const lonAt=x=>lo0+(x-X(lo0))/(k*sc),latAt=y=>la1-(y-Y(la1))/sc;
+  const view=[lonAt(0),latAt(H),lonAt(W),latAt(0)],bgG=outlines(s,X,Y,...view);
   const step=(lo1-lo0)>8?2:1;
   for(let g=Math.ceil(lo0);g<=lo1;g++){if(g%step)continue;
     s.appendChild(el("line",{x1:X(g),y1:0,x2:X(g),y2:H,class:"gl"}));
@@ -559,9 +672,6 @@ function map(now,A){
   for(let g=Math.ceil(la0);g<=la1;g++){if(g%step)continue;
     s.appendChild(el("line",{x1:0,y1:Y(g),x2:W,y2:Y(g),class:"gl"}));
     s.appendChild(el("text",{x:4,y:Y(g)-4,class:"ax"},Math.abs(g)+(g<0?"S":"N")));}
-  // what the box shows, which is wider than the data one way or the other
-  const lonAt=x=>lo0+(x-X(lo0))/(k*sc),latAt=y=>la1-(y-Y(la1))/sc;
-  outlines(s,X,Y,lonAt(0),latAt(H),lonAt(W),latAt(0));
   const S={};st.forEach(x=>S[x.id]=x);
   // a faint line from each aircraft to the station it is talking to
   ac.forEach(a=>{const p=a.track[a.track.length-1],g=S[a.station];if(!g||now-p[0]>1800)return;
@@ -569,7 +679,7 @@ function map(now,A){
       "stroke-width":1,"stroke-dasharray":"4 4"}));});
   ac.forEach(a=>{if(a.track.length<2)return;
     s.appendChild(el("polyline",{points:a.track.map(p=>X(p[2])+","+Y(p[1])).join(" "),fill:"none",
-      stroke:"#8b98a5","stroke-opacity":.5,"stroke-width":1.5}));});
+      stroke:"#e3b341","stroke-opacity":.6,"stroke-width":1.5}));});
   const boxes=[],hit=(a,b)=>a[0]<b[0]+b[2]&&b[0]<a[0]+a[2]&&a[1]<b[1]+b[3]&&b[1]<a[1]+a[3];
   st.forEach(x=>boxes.push([X(x.lon)-6,Y(x.lat)-6,12,12]));
   const place=(cx,cy,t,cls,cw)=>{const w=t.length*cw,h=13;
@@ -586,6 +696,7 @@ function map(now,A){
   st.forEach(x=>{const r=el("rect",{x:X(x.lon)-5,y:Y(x.lat)-5,width:10,height:10,rx:2,fill:"#4aa8ff"});
     r.appendChild(el("title",null,x.id+": "+ll(x.lat,x.lon)+", ±"+x.spread_km+" km from "+x.n_pos+" positions, "+x.frames+" frames"));
     s.appendChild(r);});
+  placeNames(bgG,X,Y,...view,boxes);
 }
 let rt=null;window.addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>{if(D)render();},200);});
 load();setInterval(load,3000);

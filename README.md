@@ -116,16 +116,28 @@ station), and the frame: ACARS with tail, flight, label and text, an XID, or a c
 hearing now, seconds behind the air. It shows:
 
 - aircraft and stations on a map, each aircraft with its track and a line to the station it is
-  talking to, over coastlines, country and state borders and lakes;
-- the newest messages, the aircraft heard in the last 30 minutes, handoffs, and per-channel counts.
+  talking to, over land and water, country and state borders, lakes and town names;
+- the newest messages, the aircraft heard in the last 30 minutes, handoffs, and per-channel counts;
+- the receiver: the dongle, its gain and `--ppm`, dropped samples, and how far off frequency it
+  is, with a suggested `--ppm`.
 
 Station positions are estimated as the Observatory does it, from the positions reported since the
 receiver started. The state lives in memory, so it starts empty after a restart; for history, use the
 Observatory. `GET /api/state` returns the same state as JSON.
 
-The map lines are Natural Earth's 1:50m coast, border, state and lake lines, built into the binary
-from `data/outlines.json` (made by `data/build_outlines.py`) and served at `/map.json`, so the page
-needs no internet and loads no tiles. The map frames itself on what the receiver hears.
+The map is Natural Earth's 1:50m land, lakes, and country and state lines, with its 1:10m towns,
+built into the binary from `data/outlines.json` (made by `data/build_outlines.py`) and served at
+`/map.json`, so the page needs no internet and loads no tiles. The map frames itself on what the
+receiver hears, and shows fewer, bigger towns as the area it covers grows.
+
+**Frequency error and `--ppm`.** Every frame's carrier offset from its channel is measured on the
+unique word, in ppm: dumpvdl2's `freq_skew`, which the JSON output carries under the same name
+(within a few tenths of a ppm of dumpvdl2's on the same recordings). One aircraft says little, since
+transmitters are allowed a few ppm each way, but the median across many is the dongle's own error.
+The Receiver panel takes each aircraft's median over its recent frames, then the median across the
+aircraft heard in the last two hours, and once there are ten it suggests a `--ppm`: the current
+setting minus that error, rounded. Change it in `/etc/vdl2-observatory.conf` and restart the
+receiver. A TCXO dongle such as the RTL-SDR Blog V3 usually needs none.
 
 ## The Observatory
 

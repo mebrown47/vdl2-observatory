@@ -222,7 +222,8 @@ VDL2_PAGE = r"""<!doctype html>
     --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2b333d;
     --fg:#e6edf3; --dim:#8b98a5; --accent:#4aa8ff; --good:#3fb950;
     --warn:#d29922; --hot:#f778ba; --grid:#242c36;
-    --coast:#3e4c5c; --border:#4a5665; --state:#29323d;
+    --coast:#46566a; --border:#5a6878; --state:#36414e; --land:#1d242d; --water:#141920;
+    --place:#8593a1;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);
@@ -273,6 +274,7 @@ VDL2_PAGE = r"""<!doctype html>
   .empty{color:var(--dim);padding:30px;text-align:center;font-size:13px}
   .bar:hover{opacity:.82}
   .mapax{fill:var(--dim);font-size:11px}
+  .plc{fill:var(--place);font-size:10.5px}
   .maplbl{fill:var(--fg);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;cursor:pointer}
   .stsel{color:var(--dim);font-size:12px;min-height:16px;margin-top:6px}
   .strow{cursor:pointer}
@@ -312,7 +314,7 @@ VDL2_PAGE = r"""<!doctype html>
     <h2>Station map <span class="hint">each station at the centre of the positions of aircraft talking to or hearing it, all time; biased towards this receiver for distant stations. Click a station (here or in Ground stations) for its spread and positions</span></h2>
     <div id="stmap"></div>
     <div id="stsel" class="stsel"></div>
-    <div class="stsel" style="text-align:right">outlines: Natural Earth</div>
+    <div class="stsel" style="text-align:right">map: Natural Earth</div>
   </div>
   <div class="grid">
     <div>
@@ -433,31 +435,56 @@ function ll(lat,lon){return Math.abs(lat).toFixed(1)+(lat<0?'S ':'N ')+
 // station's details stay in its tooltip), busiest stations first.
 // #st=ID in the address selects a station, so a view can be shared.
 let SEL=(location.hash.match(/st=([0-9A-Fa-f]{6})/)||[])[1]||null, MAPDATA=null;
-// Background lines from /map.json (Natural Earth 1:50m, data/outlines.json),
-// fetched once. Each line keeps its box, so only those in view are drawn, and the
-// path is rebuilt only when the view moves.
-let OUT=null,outKey="",outD={};
-const OUTSTYLE={state:["var(--state)",.8],lake:["var(--coast)",1],border:["var(--border)",1.1],coast:["var(--coast)",1.2]};
+// Background map from /map.json (Natural Earth, data/outlines.json), fetched
+// once: land over water, lakes, state and country lines, and towns to read it by.
+// Each line keeps its box, so only those in view are drawn, and the paths are
+// rebuilt only when the view moves.
+let OUT=null,OUTP=[],outKey="",outD={};
+// fill, stroke, stroke width, in drawing order
+const OUTSTYLE={land:["var(--land)","var(--coast)",1],lake:["var(--water)","var(--coast)",.8],
+  state:["none","var(--state)",.8],border:["none","var(--border)",1.1]};
 fetch("/map.json").then(r=>r.json()).then(d=>{const q=d.q;OUT={};
   for(const [k,ls] of Object.entries(d.layers))OUT[k]=ls.map(e=>{const p=new Float32Array(e.length);
     let x=e[0],y=e[1],b=[x,y,x,y];p[0]=x/q;p[1]=y/q;
     for(let i=2;i<e.length;i+=2){x+=e[i];y+=e[i+1];p[i]=x/q;p[i+1]=y/q;
       if(x<b[0])b[0]=x;if(x>b[2])b[2]=x;if(y<b[1])b[1]=y;if(y>b[3])b[3]=y;}
     return {p,b:b.map(v=>v/q)};});
+  OUTP=(d.places||[]).map(p=>({lon:p[0]/q,lat:p[1]/q,r:p[2],n:p[3]}));
   if(MAPDATA)stationMap(...MAPDATA);}).catch(()=>{});
+// The background, clipped to the frame, in a group the town names go into later.
 function outlines(s,X,Y,lo0,la0,lo1,la1){
-  if(!OUT)return;const key=[lo0,la0,lo1,la1,X(lo1),Y(la0)].map(v=>v.toFixed(4)).join();
+  const W=X(lo1),H=Y(la0),cp=el("clipPath",{id:"outclip"});
+  cp.appendChild(el("rect",{x:0,y:0,width:W,height:H}));s.appendChild(cp);
+  const g=el("g",{"clip-path":"url(#outclip)","pointer-events":"none"});s.appendChild(g);
+  if(!OUT)return g;
+  const key=[lo0,la0,lo1,la1,W,H].map(v=>v.toFixed(4)).join();
   if(key!==outKey){outKey=key;outD={};
-    for(const k in OUTSTYLE){let d="";
+    for(const k in OUTSTYLE){let d="";const ring=OUTSTYLE[k][0]!=="none";
       for(const l of OUT[k]||[]){const b=l.b,p=l.p;if(b[2]<lo0||b[0]>lo1||b[3]<la0||b[1]>la1)continue;
         d+="M"+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1);
-        for(let i=2;i<p.length;i+=2)d+="L"+X(p[i]).toFixed(1)+" "+Y(p[i+1]).toFixed(1);}
+        for(let i=2;i<p.length;i+=2)d+="L"+X(p[i]).toFixed(1)+" "+Y(p[i+1]).toFixed(1);
+        if(ring)d+="Z";}
       outD[k]=d;}}
-  // this page's svg overflows on purpose, so the lines are clipped to the frame
-  const W=X(lo1),H=Y(la0),cp=el("clipPath",{id:"outclip"}),g=el("g",{"clip-path":"url(#outclip)"});
-  cp.appendChild(el("rect",{x:0,y:0,width:W,height:H}));s.appendChild(cp);s.appendChild(g);
-  for(const k in OUTSTYLE)if(outD[k])g.appendChild(el("path",{d:outD[k],fill:"none",stroke:OUTSTYLE[k][0],
-    "stroke-width":OUTSTYLE[k][1],"stroke-linejoin":"round","pointer-events":"none"}));
+  for(const k in OUTSTYLE)if(outD[k])g.appendChild(el("path",{d:outD[k],fill:OUTSTYLE[k][0],
+    "fill-rule":"evenodd",stroke:OUTSTYLE[k][1],"stroke-width":OUTSTYLE[k][2],"stroke-linejoin":"round"}));
+  return g;
+}
+// Town names, under the data and clear of its labels (boxes): only the bigger
+// towns as the view widens, and no more than 30.
+function placeNames(g,X,Y,lo0,la0,lo1,la1,boxes){
+  const W=X(lo1),H=Y(la0),span=Math.max(lo1-lo0,la1-la0);
+  const maxr=span>40?2:span>20?4:span>10?6:span>5?7:8;
+  const hit=(a,b)=>a[0]<b[0]+b[2]&&b[0]<a[0]+a[2]&&a[1]<b[1]+b[3]&&b[1]<a[1]+a[3];
+  let n=0;
+  for(const p of OUTP){
+    if(p.r>maxr||p.lon<lo0||p.lon>lo1||p.lat<la0||p.lat>la1)continue;
+    const x=X(p.lon),y=Y(p.lat),w=p.n.length*6.1+6,b=[x-3,y-7,w,13];
+    if(b[0]<0||b[1]<0||b[0]+w>W||b[1]+13>H||boxes.some(q=>hit(b,q)))continue;
+    boxes.push(b);
+    g.appendChild(el("circle",{cx:x,cy:y,r:1.7,fill:"var(--place)"}));
+    g.appendChild(el("text",{x:x+4,y:y+3.5,class:"plc"},p.n));
+    if(++n>=30)break;
+  }
 }
 if(SEL)SEL=SEL.toUpperCase();
 function selectStation(id){SEL=SEL===id?null:id;
@@ -487,8 +514,11 @@ function stationMap(host,all,pos){
   const sc=Math.min(W/((lo1-lo0)*k),H/(la1-la0));
   const X=lo=>(lo-lo0)*k*sc+(W-(lo1-lo0)*k*sc)/2, Y=la=>(la1-la)*sc+(H-(la1-la0)*sc)/2;
   host.innerHTML="";const s=el("svg",{viewBox:"0 0 "+W+" "+H,width:W,height:H});host.appendChild(s);
-  const bg=el("rect",{x:0,y:0,width:W,height:H,fill:"transparent",stroke:"var(--line)"});
+  const bg=el("rect",{x:0,y:0,width:W,height:H,fill:"var(--water)",stroke:"var(--line)"});
   bg.addEventListener("click",()=>{if(SEL)selectStation(SEL);});s.appendChild(bg);
+  // what the box shows, which is wider than the data one way or the other
+  const lonAt=x=>lo0+(x-X(lo0))/(k*sc),latAt=y=>la1-(y-Y(la1))/sc;
+  const view=[lonAt(0),latAt(H),lonAt(W),latAt(0)],bgG=outlines(s,X,Y,...view);
   const step=(lo1-lo0)>8?2:1;
   for(let g=Math.ceil(lo0);g<=lo1;g++){if(g%step)continue;
     s.appendChild(el("line",{x1:X(g),y1:0,x2:X(g),y2:H,class:"gl"}));
@@ -496,9 +526,6 @@ function stationMap(host,all,pos){
   for(let g=Math.ceil(la0);g<=la1;g++){if(g%step)continue;
     s.appendChild(el("line",{x1:0,y1:Y(g),x2:W,y2:Y(g),class:"gl"}));
     s.appendChild(el("text",{x:4,y:Y(g)-4,class:"mapax"},Math.abs(g)+(g<0?"S":"N")));}
-  // what the box shows, which is wider than the data one way or the other
-  const lonAt=x=>lo0+(x-X(lo0))/(k*sc),latAt=y=>la1-(y-Y(la1))/sc;
-  outlines(s,X,Y,lonAt(0),latAt(H),lonAt(W),latAt(0));
   const at={};st.forEach(x=>at[x.station]=x);
   const sel=SEL?at[SEL]:null;
   if(sel){
@@ -534,6 +561,7 @@ function stationMap(host,all,pos){
       x.n_pos+" positions ("+x.n_target+" from aircraft talking to it, "+x.n_heard+" from XID alternate lists)"));
     r.addEventListener("click",e=>{e.stopPropagation();selectStation(x.station);});
     s.appendChild(r);});
+  placeNames(bgG,X,Y,...view,boxes.concat(labels));
   info.textContent=sel?sel.station+": "+ll(sel.lat,sel.lon)+", ±"+sel.spread_km+" km from "+sel.n_pos+
     " positions ("+sel.n_target+" from aircraft talking to it, "+sel.n_heard+" from XID alternate lists). Click again to clear."
     :st.length+" stations placed, "+pos.length+" positions";
