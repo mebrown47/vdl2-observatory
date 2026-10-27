@@ -269,6 +269,43 @@ if [ -f "$HAND_UNIT" ]; then
   HAND_ARCHIVE="$(sed -nE 's/.*--archive[ =]([^ ]+).*/\1/p' <<<"$exec_line" | sed "s|%h|$HOME|g")"
 fi
 
+# ---- current settings -------------------------------------------------------
+# The parts of a VDL2_ARGS the questions below cover, so --reconfigure offers
+# them as the defaults and changing one doesn't reset the rest. CUR_KEEP holds
+# what the questions don't cover (--channels, --waypoints, ...), carried over as
+# it is. The rules follow vdl2-sniffer's: --rtlsdr and --basestation take the
+# next word unless it is an option; --udp takes every word up to the next one.
+parse_current() {
+  local -a w; read -r -a w <<<"$1"
+  CUR_DEV=""; CUR_PLAN=us; CUR_GAIN=auto; CUR_PPM=0; CUR_BIAS=n
+  CUR_UDP=""; CUR_STATION=""; CUR_SBS=""; CUR_KEEP=""
+  local i=0 k v n=${#w[@]}
+  while [ "$i" -lt "$n" ]; do
+    k="${w[$i]}"; v=""; i=$((i+1))
+    case "$k" in --*=*) v="${k#*=}"; k="${k%%=*}";; esac
+    next() { if [ -z "$v" ] && [ "$i" -lt "$n" ]; then v="${w[$i]}"; i=$((i+1)); fi; }
+    maybe() { if [ -z "$v" ] && [ "$i" -lt "$n" ] && [[ "${w[$i]}" != -* ]]; then v="${w[$i]}"; i=$((i+1)); fi; }
+    case "$k" in
+      --rtlsdr)               maybe; CUR_DEV="${v:-0}";;
+      --plan)                 next; CUR_PLAN="$v";;
+      --gain)                 next; CUR_GAIN="$v";;
+      --ppm)                  next; CUR_PPM="$v";;
+      --bias-tee)             CUR_BIAS=y;;
+      --station-id|--station) next; CUR_STATION="$v";;
+      --basestation)          maybe; CUR_SBS="${v:-30003}";;
+      --udp)
+        [ -n "$v" ] || { next; }
+        CUR_UDP+=" ${v//,/ }"
+        while [ "$i" -lt "$n" ] && [[ "${w[$i]}" != -* ]]; do CUR_UDP+=" ${w[$i]//,/ }"; i=$((i+1)); done;;
+      *)
+        CUR_KEEP+=" ${w[$((i-1))]}"
+        # an unknown option's value, if it has one, stays with it
+        while [ "$i" -lt "$n" ] && [[ "${w[$i]}" != -* ]]; do CUR_KEEP+=" ${w[$i]}"; i=$((i+1)); done;;
+    esac
+  done
+  CUR_UDP="$(echo $CUR_UDP)"; CUR_KEEP="$(echo $CUR_KEEP)"
+}
+
 # ---- config -----------------------------------------------------------------
 if [ -f "$CONF" ] && [ "$MODE" != reconfigure ]; then
   info "Config"
@@ -286,50 +323,66 @@ else
   if [ "$HAND" -eq 1 ] && [ -n "$HAND_ARGS" ] && yes_no "Keep those settings" y; then
     VDL2_ARGS="$HAND_ARGS"
   else
+    # Defaults: the current settings when there are some (--reconfigure, or a
+    # receiver set up by hand), else the stock ones.
+    parse_current "${VDL2_ARGS:-$HAND_ARGS}"
+    if [ -n "${VDL2_ARGS:-$HAND_ARGS}" ]; then
+      say "  Current settings are the defaults: press Enter to keep each one."
+    fi
     if [ "${#RTLS[@]}" -gt 1 ]; then
       say "  RTL-SDRs found:"
-      for i in "${!RTLS[@]}"; do say "    $((i+1))) serial ${RTLS[$i]%% *}"; done
-      n="$(ask "Which one" 1)"
+      cur=1
+      for i in "${!RTLS[@]}"; do
+        say "    $((i+1))) serial ${RTLS[$i]%% *}"
+        [ "${RTLS[$i]%% *}" = "$CUR_DEV" ] || [ "$i" = "$CUR_DEV" ] && cur=$((i+1))
+      done
+      n="$(ask "Which one" "$cur")"
       [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] && [ "$n" -le "${#RTLS[@]}" ] || n=1
       serial="${RTLS[$((n-1))]%% *}"
       # A serial picks the same dongle after a reboot; an index may not.
       if [ "$serial" != - ]; then DEV="$serial"; else DEV=$((n-1)); fi
     else
-      DEV=0
+      DEV="${CUR_DEV:-0}"
     fi
     VDL2_ARGS="--rtlsdr $DEV"
-    plan="$(ask "Channel plan, us or eu" us)"
+    plan="$(ask "Channel plan, us or eu" "$CUR_PLAN")"
     case "$plan" in us|eu) ;; *) warn "'$plan' is not us or eu — using us"; plan=us;; esac
     [ "$plan" = us ] || VDL2_ARGS+=" --plan $plan"
-    gain="$(ask "Tuner gain in dB, or auto" auto)"
+    gain="$(ask "Tuner gain in dB, or auto" "$CUR_GAIN")"
     if [ "$gain" != auto ]; then
       if [[ "$gain" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then VDL2_ARGS+=" --gain $gain"
       else warn "'$gain' is not a number — using auto"; fi
     fi
-    ppm="$(ask "Frequency correction in ppm" 0)"
+    ppm="$(ask "Frequency correction in ppm (the live page's Receiver panel suggests one)" "$CUR_PPM")"
     if [ "$ppm" != 0 ]; then
       if [[ "$ppm" =~ ^-?[0-9]+$ ]]; then VDL2_ARGS+=" --ppm $ppm"
       else warn "'$ppm' is not a whole number — using 0"; fi
     fi
-    yes_no "Power an LNA through the dongle's bias tee" n && VDL2_ARGS+=" --bias-tee"
+    yes_no "Power an LNA through the dongle's bias tee" "$CUR_BIAS" && VDL2_ARGS+=" --bias-tee"
     # UDP feeds, in dumpvdl2's JSON: aggregators and a local acarshub, any mix,
-    # all on one --udp. vdl2-sniffer takes 8 at most.
+    # all on one --udp. vdl2-sniffer takes 8 at most. "none" clears them.
     UDP=""; nfeed=0
-    for f in $(ask "Feed frames over UDP: HOST:PORT destinations, space-separated (blank for none)" "" | tr ',' ' '); do
+    feeds="$(ask "Feed frames over UDP: HOST:PORT destinations, space-separated (none for none)" "${CUR_UDP:-none}")"
+    [ "$feeds" = none ] && feeds=""
+    for f in $(tr ',' ' ' <<<"$feeds"); do
       if ! [[ "$f" =~ ^[^:/[:space:]]+:[0-9]+$ ]]; then warn "skipping '$f' — expected HOST:PORT"; continue; fi
       if [ "$nfeed" -ge 8 ]; then warn "skipping '$f' — at most 8 destinations"; continue; fi
       UDP+=" $f"; nfeed=$((nfeed+1))
     done
     if [ "$nfeed" -gt 0 ]; then
       VDL2_ARGS+=" --udp$UDP"
-      st="$(ask "Station ID for your feeds (blank for none)" "")"
-      [ -n "$st" ] && VDL2_ARGS+=" --station-id $st"
+      st="$(ask "Station ID for your feeds (none for none)" "${CUR_STATION:-none}")"
+      [ -n "$st" ] && [ "$st" != none ] && VDL2_ARGS+=" --station-id $st"
     fi
     # SBS: a port to serve on, or HOST:PORT to push to.
-    sbs="$(ask "Aircraft positions as SBS/BaseStation: a port to serve, HOST:PORT to push (blank for none)" "")"
-    if [ -n "$sbs" ]; then
+    sbs="$(ask "Aircraft positions as SBS/BaseStation: a port to serve, HOST:PORT to push (none for none)" "${CUR_SBS:-none}")"
+    if [ -n "$sbs" ] && [ "$sbs" != none ]; then
       if [[ "$sbs" =~ ^([^:/[:space:]]+:)?[0-9]+$ ]]; then VDL2_ARGS+=" --basestation=$sbs"
       else warn "skipping '$sbs' — expected PORT or HOST:PORT"; fi
+    fi
+    if [ -n "$CUR_KEEP" ]; then
+      VDL2_ARGS+=" $CUR_KEEP"
+      ok "kept as they were (edit $CONF to change them): $CUR_KEEP"
     fi
   fi
   VDL2_ARGS="$(echo "$VDL2_ARGS" | sed 's/^ *//; s/  */ /g; s/ *$//')"

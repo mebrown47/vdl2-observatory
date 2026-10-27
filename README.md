@@ -41,7 +41,7 @@ edit); program files in `/opt/vdl2-observatory`; the archive and database in
 
 ```bash
 ./install.sh --update        # git pull, rebuild, test, reinstall, restart
-./install.sh --reconfigure   # ask the questions again
+./install.sh --reconfigure   # ask the questions again; Enter keeps each current setting
 ./install.sh --uninstall     # remove services and program files; settings and data stay
 ./install.sh --dry-run       # show what it would do as root, change nothing
 ```
