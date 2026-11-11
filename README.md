@@ -84,9 +84,10 @@ Other rates and centres are mixed and resampled, so 2.5 MS/s from an Airspy R2 a
 
 | Option | |
 | --- | --- |
-| `--rtlsdr [DEV]` | read an RTL-SDR directly: index or serial (default 0); `--gain DB` (default auto), `--ppm N`, `--bias-tee`. If the decoder falls behind, whole buffers are dropped and reported once a minute, and frame times stay true. If the device goes away, vdl2-sniffer exits with status 1 for a service manager to restart it |
+| `--rtlsdr [DEV]` | read an RTL-SDR directly: index or serial (default 0); `--gain DB` (default auto), `--ppm N`, `--bias-tee`. If the decoder falls behind, whole buffers are dropped and reported once a minute, and frame times stay true. If the device goes away, vdl2-sniffer exits with status 1 for a service manager to restart it; if it hangs without going away, the watchdog below does the same |
 | `-r FILE` / `-` | IQ file or stdin; `--format cu8\|cs8\|ci16\|cf32` (from the extension by default, cu8 on stdin) |
 | `-s HZ`, `-c HZ` | input rate (default 1050000) and centre (default: the plan's centre) |
+| `--stall-exit S` | watchdog for live input (RTL-SDR or stdin): when no samples have been decoded for S seconds, log whether the radio went silent or the decoder stuck, and exit with status 3 so the service restarts it (default 60; 0 = never). A working RTL-SDR delivers samples every 31 ms however quiet the channels are, so a minute with none is a hang. Also ends a shutdown that hangs in the driver for more than 10 s |
 | `--plan us\|eu`, `--channels LIST` | channel plan, or channels in MHz or Hz |
 | `--start TIME` | capture start for a file: epoch, `YYYY-MM-DD HH:MM:SS` local, or `...Z` UTC. Default: the file's mtime minus its length |
 | `--json [FILE]` | one dumpvdl2-style JSON object per frame (stdout by default); `--raw` adds the AVLC octets. XID frames use dumpvdl2's layout (`pub_params`, `vdl_params`), which feed parsers such as acars_router require; on the ten captures every frame passes acars_vdlm2_parser |

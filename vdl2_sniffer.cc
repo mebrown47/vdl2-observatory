@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cerrno>
 #include <cmath>
 #include <complex>
@@ -49,6 +50,7 @@
 #include <future>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -112,6 +114,7 @@ struct Options {
     int webPort = 0;                 // --web: the live page on this port; 0 off
     int obsPort = 8891;              // the Observatory the live page links to; 0 no link
     double maxSeconds = 0;
+    int stallExit = 60;              // live input: exit after this many seconds without samples; 0 never
     bool printCentre = false;
     bool raw = false;                // AVLC octets in the JSON, for A/B checks
     bool quiet = false;
@@ -149,6 +152,9 @@ static void usage(FILE* out) {
         "      --basestation-fix  also send positions from a named fix (the aircraft may be\n"
         "                        well past it; default: only reported coordinates)\n"
         "      --max-seconds S   stop after S seconds of input\n"
+        "      --stall-exit S    live input (RTL-SDR or stdin): exit with status 3 when no\n"
+        "                        samples have been decoded for S seconds, so a service\n"
+        "                        manager restarts it (default 60; 0 = never)\n"
         "      --waypoints FILE  fix list for positions from ACARS text (IDENT,LAT,LON;\n"
         "                        default: the installed waypoints.csv; none = off)\n"
         "  -q, --quiet           no per-frame summary on stdout\n");
@@ -235,6 +241,7 @@ static bool parseOptions(int argc, char** argv, Options& o) {
             if (o.obsPort < 0 || o.obsPort > 65535) { fprintf(stderr, "vdl2-sniffer: bad --observatory-port %s\n", val.c_str()); return false; }
         }
         else if (k == "--max-seconds") { if (!need()) return false; o.maxSeconds = atof(val.c_str()); }
+        else if (k == "--stall-exit") { if (!need()) return false; o.stallExit = atoi(val.c_str()); }
         else if (k == "--waypoints") { if (!need()) return false; o.waypoints = val; }
         else if (k == "-q" || k == "--quiet") o.quiet = true;
         else { fprintf(stderr, "vdl2-sniffer: unknown option %s\n", k.c_str()); usage(stderr); return false; }
@@ -556,6 +563,7 @@ private:
 class RtlInput {
 public:
     std::atomic<uint64_t> dropped{0};   // bytes
+    std::atomic<uint64_t> arrived{0};   // bytes the device has delivered, dropped or not
     std::string device, tuner, gain;    // for the live page
     std::atomic<bool> failed{false};    // the device stopped without being asked
 
@@ -642,6 +650,7 @@ private:
             rtlsdr_cancel_async(self->dev_);
             return;
         }
+        self->arrived += len;
         int queued = 0;
         ioctl(self->fd_[1], FIONREAD, &queued);
         if (self->pipeSize_ - queued < (int)len) {
@@ -669,6 +678,80 @@ struct ChannelStats {
     uint64_t bursts = 0, frames = 0, acars = 0;     // whole run
     uint64_t minuteBursts = 0, minuteFrames = 0;    // current archive minute
     uint64_t lastBursts = 0;                        // decoder counter at the last block
+};
+
+/* ---------- watchdog ---------- */
+
+// A live input that goes quiet without ending. A dongle or its USB link can
+// hang so that librtlsdr neither delivers samples nor returns an error; the
+// process then sits in read() for good, alive and silent, and a service
+// manager never restarts it. Iridium-sniffer's feeder spent 30 hours like
+// that on a different radio. Samples arrive every 31 ms from a working
+// RTL-SDR whatever the channels carry, so a minute with none decoded is a
+// stall: this logs which kind (radio silent, or radio sending and the decoder
+// stuck) and ends the process with status 3. _exit, because the main thread
+// is the one that's stuck. Also for a shutdown (a signal, or the input
+// ending) that hangs in the driver for more than 10 s.
+class Watchdog {
+public:
+    std::atomic<uint64_t> progress{0};   // input samples decoded so far
+    std::atomic<bool> finishing{false};  // the main loop has ended
+
+    // arrived: the device's delivered-bytes counter, or null for stdin.
+    void start(int seconds, const std::atomic<uint64_t>* arrived, const char* what) {
+        if (seconds <= 0) return;
+        th_ = std::thread([=] { run(seconds, arrived, what); });
+    }
+    void stop() {
+        { std::lock_guard<std::mutex> l(m_); done_ = true; }
+        cv_.notify_all();
+        if (th_.joinable()) th_.join();
+    }
+    ~Watchdog() { stop(); }
+
+private:
+    // not the wall clock, which can jump when NTP sets it at boot
+    static double mono() {
+        timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return ts.tv_sec + ts.tv_nsec * 1e-9;
+    }
+    void run(int seconds, const std::atomic<uint64_t>* arrived, const char* what) {
+        uint64_t lastP = progress, lastA = arrived ? arrived->load() : 0;
+        double pAt = mono(), aAt = pAt, stopAt = 0;
+        bool armed = arrived != nullptr;   // a pipe may not have started yet: wait for its first samples
+        std::unique_lock<std::mutex> l(m_);
+        while (!cv_.wait_for(l, std::chrono::seconds(1), [this] { return done_; })) {
+            const double now = mono();
+            const uint64_t p = progress, a = arrived ? arrived->load() : 0;
+            if (p != lastP) { lastP = p; pAt = now; armed = true; }
+            if (a != lastA) { lastA = a; aAt = now; }
+            if (stopRequested || finishing) {
+                if (!stopAt) stopAt = now;
+                if (now - stopAt >= 10) {
+                    fprintf(stderr, "vdl2-sniffer: still not stopped 10 s after being asked (%s hung?); exiting\n", what);
+                    _exit(stopRequested ? 0 : 1);
+                }
+                continue;
+            }
+            if (!armed || now - pAt < seconds) continue;
+            if (!arrived)
+                fprintf(stderr, "vdl2-sniffer: no input on stdin for %d s; exiting with status 3 (--stall-exit)\n",
+                        seconds);
+            else if (now - aAt < seconds)
+                fprintf(stderr, "vdl2-sniffer: the %s is still sending but nothing has been decoded for %d s "
+                        "(processing stalled); exiting with status 3 for a restart (--stall-exit)\n", what, seconds);
+            else
+                fprintf(stderr, "vdl2-sniffer: no samples from the %s for %d s (radio or USB stopped); "
+                        "exiting with status 3 for a restart (--stall-exit)\n", what, seconds);
+            _exit(3);
+        }
+    }
+
+    std::thread th_;
+    std::mutex m_;
+    std::condition_variable cv_;
+    bool done_ = false;
 };
 
 /* ---------- the engine ---------- */
@@ -1071,6 +1154,12 @@ int main(int argc, char** argv) {
     double lastDropReport = 0;
     if (live) setvbuf(stdout, nullptr, _IOLBF, 0);
 
+    Watchdog watchdog;
+#ifdef HAVE_RTLSDR
+    if (live) watchdog.start(o.stallExit, &rtl.arrived, "RTL-SDR");
+#endif
+    if (!live && in == stdin) watchdog.start(o.stallExit, nullptr, "stdin");
+
     while (!stopRequested) {
         size_t want = chunk;
         if (inCount + want > maxIn) want = (size_t)(maxIn - inCount);
@@ -1089,6 +1178,7 @@ int main(int argc, char** argv) {
         }
         if (carry) memmove(raw.data(), raw.data() + k * bps, carry);
         inCount += k;
+        watchdog.progress = inCount;
 #ifdef HAVE_RTLSDR
         // Samples the decoder had no room for: the clock moves on past them.
         if (live) {
@@ -1146,6 +1236,7 @@ int main(int argc, char** argv) {
             web.input(inCount, droppedSamples);
         }
     }
+    watchdog.finishing = true;
     flushMinute();
 
     if (sbs) basestation_destroy();
@@ -1159,6 +1250,7 @@ int main(int argc, char** argv) {
 #endif
     if (jsonOut && jsonOut != stdout) fclose(jsonOut);
     if (in != stdin) fclose(in);
+    watchdog.stop();
 
     uint64_t nBursts = 0;
     for (auto& s : stats) nBursts += s.bursts;
