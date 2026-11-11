@@ -1,0 +1,10 @@
+data/outlines.json (the land, lakes, borders and towns drawn on the live
+page's and the Observatory's maps, built by data/build_outlines.py) is made
+from Natural Earth's 1:50m and 1:10m vector data:
+
+    https://www.naturalearthdata.com/
+    https://github.com/nvkelso/natural-earth-vector (commit ca96624a56bd)
+
+Natural Earth is in the public domain; its terms of use are at
+https://www.naturalearthdata.com/about/terms-of-use/. No permission or
+credit is required. It is credited here anyway: made with Natural Earth.

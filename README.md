@@ -16,6 +16,8 @@ and now stands alone; it needs no Iridium hardware or software.
 
 ## Install
 
+New to Linux or SDR? [QUICKSTART.md](QUICKSTART.md) walks through it step by step.
+
 On Debian, Ubuntu or Raspberry Pi OS, with an RTL-SDR plugged in:
 
 ```bash
@@ -48,6 +50,11 @@ edit); program files in `/opt/vdl2-observatory`; the archive and database in
 
 A receiver set up by hand with the user units in `systemd/` is taken over: the installer offers its
 settings, copies its archive, and stops and removes its user units (keeping copies).
+
+When something isn't working, `./diagnose.sh` writes one text file with what's needed to
+troubleshoot it: versions, the dongle and its permissions, service state, what the live page and the
+Observatory answer, and recent logs. It changes nothing. The file holds your settings and the stations
+you hear, so look it over before posting it publicly.
 
 ## Build
 
@@ -261,6 +268,8 @@ dashboard estimates each station's position instead, from the positions of aircr
 ## Licence
 
 GPL-3.0-or-later (`LICENSE`). The decoder in `third_party/vdl2` is Mike Brown's, under the MIT
-licence of CyberEther, the project it is written for. `acars_position.c` and `waypoint_db.c` come from iridium-sniffer. The fix list combines
-X-Plane's `earth_fix.dat` (GPL-3.0), Global Aviation Waypoints (MIT) and the FAA's fix data
-(public domain). The map outlines are Natural Earth (public domain).
+licence of CyberEther, the project it is written for. `basestation.c`, `waypoint_db.c` and
+`acars_position.c` come from iridium-sniffer. The fix list combines X-Plane's `earth_fix.dat`
+(GPL-3.0), Global Aviation Waypoints (MIT) and the FAA's fix data (public domain). The map outlines
+are Natural Earth (public domain). [LICENSES/](LICENSES/README.md) lists every part with its licence,
+holder and notice, and the libraries it links to.
