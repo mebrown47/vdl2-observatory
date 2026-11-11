@@ -7,6 +7,17 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Plain complex multiply and divide, without C99 Annex G's inf/NaN recovery.
+# GCC 11 (Ubuntu 22.04) otherwise calls libgcc's __mulsc3 for complex
+# multiplies (here in the burst demodulator and the resampler); GCC 13 keeps
+# the call behind a branch. Every sample is finite and small, so the recovery
+# path never changes a result: the recordings decode to identical frames with
+# and without it. Those multiplies run per burst, not per input sample, so it
+# saves no measurable CPU today (the filters are the cost); it's here so a
+# per-sample complex loop added later doesn't pay the price that halved
+# iridium-sniffer's speed on 22.04.
+add_compile_options(-fcx-limited-range)
+
 include(GNUInstallDirs)
 find_package(Threads REQUIRED)
 find_package(PkgConfig)
