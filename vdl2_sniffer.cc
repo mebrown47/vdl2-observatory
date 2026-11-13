@@ -36,6 +36,9 @@
 #ifdef HAVE_RTLSDR
 #include <rtl-sdr.h>
 #endif
+#ifdef HAVE_SOAPY
+#include "soapy_input.hh"
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -97,11 +100,16 @@ static const std::map<std::string, std::vector<double>> kPlans = {
 struct Options {
     std::string input = "-";
     std::string rtlsdr;              // device index or serial; "" = not an RTL-SDR
-    std::string gain = "auto";       // tuner gain in dB, or auto
+    bool soapy = false;              // --soapy: a radio through SoapySDR
+    std::string soapyArgs;           // its device arguments ("driver=hackrf"); "" = the first radio
+    std::string antenna;             // SoapySDR antenna; "" = the driver's default
+    std::vector<std::pair<std::string, std::string>> soapySettings;
+    std::string gain = "auto";       // tuner gain in dB, or auto (SoapySDR: also NAME=dB,...)
     int ppm = 0;
     bool biasTee = false;
     std::string format;              // cu8 | cs8 | ci16 | cf32; empty = from the extension
     double rate = V::Decoder::RequiredSampleRate;
+    bool rateSet = false;            // -s given (SoapySDR: the radio's rate, else chosen)
     double centre = 0;               // 0 = the plan's own centre
     std::vector<double> channels;
     std::string start;               // capture start for files
@@ -126,12 +134,21 @@ static void usage(FILE* out) {
         "usage: vdl2-sniffer [options]\n"
         "  -r, --input FILE      IQ file, or - for stdin (default -)\n"
         "      --rtlsdr [DEV]    read an RTL-SDR directly: device index or serial (default 0)\n"
-        "      --gain DB         RTL-SDR tuner gain in dB, or auto (default auto)\n"
-        "      --ppm N           RTL-SDR frequency correction in ppm (default 0)\n"
-        "      --bias-tee        RTL-SDR: power the antenna port (off by default)\n"
+        "      --soapy [ARGS]    read a radio through SoapySDR (HackRF, Airspy R2, Airspy HF+,\n"
+        "                        ...): device arguments such as driver=airspy or\n"
+        "                        driver=hackrf,serial=... (default: the first radio found;\n"
+        "                        --soapy list shows them). Its rate is chosen unless -s is\n"
+        "                        given, and converted to 1.05 MS/s\n"
+        "      --antenna NAME    SoapySDR: the antenna input (default: the driver's)\n"
+        "      --soapy-setting KEY=VALUE  SoapySDR: a driver setting (may be repeated)\n"
+        "      --gain DB         tuner gain in dB, or auto (default auto); SoapySDR also\n"
+        "                        takes stages by name: LNA=32,VGA=20\n"
+        "      --ppm N           frequency correction in ppm (default 0)\n"
+        "      --bias-tee        power the antenna port (off by default)\n"
         "      --format F        cu8 | cs8 | ci16 | cf32 (default: from extension, cu8 on stdin)\n"
-        "  -s, --rate HZ         input sample rate (default 1050000)\n"
-        "  -c, --centre HZ       input centre frequency (default: the channel plan's centre)\n"
+        "  -s, --rate HZ         input sample rate (default 1050000; SoapySDR: chosen)\n"
+        "  -c, --centre HZ       input centre frequency (default: the channel plan's centre;\n"
+        "                        a HackRF 250 kHz above it, clear of its DC spike)\n"
         "      --plan us|eu      channel plan (default us)\n"
         "      --channels LIST   channels, comma-separated, MHz or Hz (overrides --plan)\n"
         "      --print-centre    print the centre to tune the receiver to, and exit\n"
@@ -153,7 +170,7 @@ static void usage(FILE* out) {
         "      --basestation-fix  also send positions from a named fix (the aircraft may be\n"
         "                        well past it; default: only reported coordinates)\n"
         "      --max-seconds S   stop after S seconds of input\n"
-        "      --stall-exit S    live input (RTL-SDR or stdin): exit with status 3 when no\n"
+        "      --stall-exit S    live input (a radio or stdin): exit with status 3 when no\n"
         "                        samples have been decoded for S seconds, so a service\n"
         "                        manager restarts it (default 60; 0 = never)\n"
         "      --waypoints FILE  fix list for positions from ACARS text (IDENT,LAT,LON;\n"
@@ -201,11 +218,19 @@ static bool parseOptions(int argc, char** argv, Options& o) {
         if (k == "-h" || k == "--help") { usage(stdout); exit(0); }
         else if (k == "-r" || k == "--input") { if (!need()) return false; o.input = val; }
         else if (k == "--rtlsdr") { maybe("0"); o.rtlsdr = val; }
+        else if (k == "--soapy") { maybe(""); o.soapy = true; o.soapyArgs = val; }
+        else if (k == "--antenna") { if (!need()) return false; o.antenna = val; }
+        else if (k == "--soapy-setting") {
+            if (!need()) return false;
+            const size_t eq = val.find('=');
+            if (eq == std::string::npos || !eq) { fprintf(stderr, "vdl2-sniffer: --soapy-setting needs KEY=VALUE\n"); return false; }
+            o.soapySettings.emplace_back(val.substr(0, eq), val.substr(eq + 1));
+        }
         else if (k == "--gain") { if (!need()) return false; o.gain = val; }
         else if (k == "--ppm") { if (!need()) return false; o.ppm = atoi(val.c_str()); }
         else if (k == "--bias-tee") o.biasTee = true;
         else if (k == "--format") { if (!need()) return false; o.format = val; }
-        else if (k == "-s" || k == "--rate") { if (!need()) return false; o.rate = atof(val.c_str()); }
+        else if (k == "-s" || k == "--rate") { if (!need()) return false; o.rate = atof(val.c_str()); o.rateSet = true; }
         else if (k == "-c" || k == "--centre" || k == "--center") { if (!need()) return false; o.centre = atof(val.c_str()); }
         else if (k == "--plan") { if (!need()) return false; plan = val; }
         else if (k == "--channels") { if (!need()) return false; o.channels = parseChannels(val); }
@@ -254,6 +279,27 @@ static bool parseOptions(int argc, char** argv, Options& o) {
     }
     std::sort(o.channels.begin(), o.channels.end());
     o.channels.erase(std::unique(o.channels.begin(), o.channels.end()), o.channels.end());
+    if (o.soapy) {
+#ifndef HAVE_SOAPY
+        fprintf(stderr, "vdl2-sniffer: built without SoapySDR, so --soapy is not available\n");
+        return false;
+#endif
+        if (!o.rtlsdr.empty()) { fprintf(stderr, "vdl2-sniffer: --soapy or --rtlsdr, not both\n"); return false; }
+        if (o.soapyArgs == "list") {
+#ifdef HAVE_SOAPY
+            soapyList(stdout);
+#endif
+            exit(0);
+        }
+        if (!o.format.empty() && o.format != "ci16") {
+            fprintf(stderr, "vdl2-sniffer: --format doesn't apply to --soapy\n");
+            return false;
+        }
+        o.format = "ci16";   // what its reader thread hands the main loop
+    } else if (!o.antenna.empty() || !o.soapySettings.empty()) {
+        fprintf(stderr, "vdl2-sniffer: --antenna and --soapy-setting are for --soapy\n");
+        return false;
+    }
     if (!o.rtlsdr.empty()) {
 #ifndef HAVE_RTLSDR
         fprintf(stderr, "vdl2-sniffer: built without librtlsdr, so --rtlsdr is not available\n");
@@ -710,6 +756,21 @@ int main(int argc, char** argv) {
         fprintf(stderr, "vdl2-sniffer: channels span %.3f-%.3f MHz, more than 1.05 MS/s holds\n", lo / 1e6, hi / 1e6);
         return 2;
     }
+#ifdef HAVE_SOAPY
+    // The radio is set up first: its reader thread delivers the decoder's own
+    // 1.05 MS/s on the plan's centre, so the rest goes as for a recording.
+    SoapyInput soapy;
+    FILE* soapyIn = nullptr;
+    if (o.soapy) {
+        SoapyOptions so;
+        so.args = o.soapyArgs; so.gain = o.gain; so.antenna = o.antenna;
+        so.rate = o.rateSet ? o.rate : 0; so.centre = o.centre;
+        so.ppm = o.ppm; so.biasTee = o.biasTee; so.settings = o.soapySettings;
+        if (!(soapyIn = soapy.open(so, o.channels, planCentre, decRate, &stopRequested))) return 1;
+        o.rate = decRate;
+        o.centre = planCentre;
+    }
+#endif
     if (o.centre <= 0) o.centre = planCentre;
     for (double c : o.channels)
         if (c < o.centre - o.rate / 2 + 10e3 || c > o.centre + o.rate / 2 - 10e3) {
@@ -737,12 +798,16 @@ int main(int argc, char** argv) {
     std::vector<ChannelStats> stats(o.channels.size());
     V::AcarsReassembler reasm;
 
-    const bool live = !o.rtlsdr.empty();
+    const bool live = !o.rtlsdr.empty() || o.soapy;
 #ifdef HAVE_RTLSDR
     RtlInput rtl;
 #endif
     FILE* in = nullptr;
-    if (live) {
+    if (o.soapy) {
+#ifdef HAVE_SOAPY
+        in = soapyIn;
+#endif
+    } else if (live) {
 #ifdef HAVE_RTLSDR
         if (!(in = rtl.open(o))) return 1;
 #endif
@@ -779,6 +844,10 @@ int main(int argc, char** argv) {
     LiveWeb::Server web;
     const bool webOn = o.webPort > 0;
     web.observatoryPort(o.obsPort);
+#ifdef HAVE_SOAPY
+    if (o.soapy) web.receiver(soapy.device, soapy.tuner, soapy.gain, o.ppm, o.biasTee, soapy.centre, soapy.rate);
+    else
+#endif
 #ifdef HAVE_RTLSDR
     if (live) web.receiver(rtl.device, rtl.tuner, rtl.gain, o.ppm, o.biasTee, o.centre, o.rate);
     else
@@ -1103,8 +1172,11 @@ int main(int argc, char** argv) {
     if (live) setvbuf(stdout, nullptr, _IOLBF, 0);
 
     Watchdog watchdog;
+#ifdef HAVE_SOAPY
+    if (o.soapy) watchdog.start(o.stallExit, &soapy.arrived, "radio");
+#endif
 #ifdef HAVE_RTLSDR
-    if (live) watchdog.start(o.stallExit, &rtl.arrived, "RTL-SDR");
+    if (live && !o.soapy) watchdog.start(o.stallExit, &rtl.arrived, "RTL-SDR");
 #endif
     if (!live && in == stdin) watchdog.start(o.stallExit, nullptr, "stdin");
 
@@ -1127,10 +1199,17 @@ int main(int argc, char** argv) {
         if (carry) memmove(raw.data(), raw.data() + k * bps, carry);
         inCount += k;
         watchdog.progress = inCount;
-#ifdef HAVE_RTLSDR
-        // Samples the decoder had no room for: the clock moves on past them.
+        // Samples the decoder had no room for (or the radio lost): the clock
+        // moves on past them.
         if (live) {
-            if (const uint64_t d = rtl.dropped.exchange(0)) {
+            uint64_t d = 0;
+#ifdef HAVE_RTLSDR
+            if (!o.soapy) d = rtl.dropped.exchange(0);
+#endif
+#ifdef HAVE_SOAPY
+            if (o.soapy) d = soapy.dropped.exchange(0);
+#endif
+            if (d) {
                 t0 += d / (double)bps / o.rate;
                 droppedSamples += d / bps;
                 minuteDropped += d / bps;
@@ -1143,7 +1222,6 @@ int main(int argc, char** argv) {
                 lastDropReport = now;
             }
         }
-#endif
 
         const cf* feed = iq.data();
         size_t nfeed = k;
@@ -1190,8 +1268,16 @@ int main(int argc, char** argv) {
     if (sbs) basestation_destroy();
     if (webOn) web.stop();
     bool deviceFailed = false;
+#ifdef HAVE_SOAPY
+    if (o.soapy) {
+        soapy.stop();
+        deviceFailed = soapy.failed;
+        if (soapy.overflows) fprintf(stderr, "vdl2-sniffer: the radio overflowed %llu times\n",
+                                     (unsigned long long)soapy.overflows.load());
+    }
+#endif
 #ifdef HAVE_RTLSDR
-    if (live) {
+    if (live && !o.soapy) {
         rtl.stop();
         deviceFailed = rtl.failed;
     }

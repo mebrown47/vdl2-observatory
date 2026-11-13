@@ -92,9 +92,10 @@ Other rates and centres are mixed and resampled, so 2.5 MS/s from an Airspy R2 a
 | Option | |
 | --- | --- |
 | `--rtlsdr [DEV]` | read an RTL-SDR directly: index or serial (default 0); `--gain DB` (default auto), `--ppm N`, `--bias-tee`. If the decoder falls behind, whole buffers are dropped and reported once a minute, and frame times stay true. If the device goes away, vdl2-sniffer exits with status 1 for a service manager to restart it; if it hangs without going away, the watchdog below does the same |
+| `--soapy [ARGS]` | read a radio through SoapySDR: HackRF, Airspy R2, Airspy HF+ (those three tested by the author), or anything else with a SoapySDR module. ARGS picks the device (`driver=airspy`, `driver=hackrf,serial=...`; default the first radio found; `--soapy list` shows them). The rate is chosen to cover the channels (1.05 MS/s where the radio has it, otherwise its lowest that fits: R2 2.5 MS/s, HF+ 912 kS/s, HackRF 2.1 MS/s) unless `-s` sets it, and converted to 1.05 MS/s on its own thread. A HackRF is tuned 250 kHz above the plan's centre, keeping its DC spike off the channels. `--gain` takes auto (the radio's AGC), a figure, or stages by name (`LNA=32,VGA=20`); `--antenna NAME`, `--soapy-setting KEY=VALUE` (repeatable), `--ppm`, `--bias-tee` as for the RTL-SDR. Drops and restarts as for `--rtlsdr`; samples the radio itself loses are counted from the clock |
 | `-r FILE` / `-` | IQ file or stdin; `--format cu8\|cs8\|ci16\|cf32` (from the extension by default, cu8 on stdin) |
-| `-s HZ`, `-c HZ` | input rate (default 1050000) and centre (default: the plan's centre) |
-| `--stall-exit S` | watchdog for live input (RTL-SDR or stdin): when no samples have been decoded for S seconds, log whether the radio went silent or the decoder stuck, and exit with status 3 so the service restarts it (default 60; 0 = never). A working RTL-SDR delivers samples every 31 ms however quiet the channels are, so a minute with none is a hang. Also ends a shutdown that hangs in the driver for more than 10 s |
+| `-s HZ`, `-c HZ` | input rate (default 1050000) and centre (default: the plan's centre). Any rate is converted to 1.05 MS/s |
+| `--stall-exit S` | watchdog for live input (a radio or stdin): when no samples have been decoded for S seconds, log whether the radio went silent or the decoder stuck, and exit with status 3 so the service restarts it (default 60; 0 = never). A working RTL-SDR delivers samples every 31 ms however quiet the channels are, so a minute with none is a hang. Also ends a shutdown that hangs in the driver for more than 10 s |
 | `--plan us\|eu`, `--channels LIST` | channel plan, or channels in MHz or Hz |
 | `--start TIME` | capture start for a file: epoch, `YYYY-MM-DD HH:MM:SS` local, or `...Z` UTC. Default: the file's mtime minus its length |
 | `--json [FILE]` | one dumpvdl2-style JSON object per frame (stdout by default); `--raw` adds the AVLC octets. XID frames use dumpvdl2's layout (`pub_params`, `vdl_params`), which feed parsers such as acars_router require; on the ten captures every frame passes acars_vdlm2_parser |
@@ -256,8 +257,8 @@ dashboard estimates each station's position instead, from the positions of aircr
 
 ## Known gaps
 
-- Direct input from RTL-SDR only (`--rtlsdr`, and so the installer); other receivers come through stdin
-  (`airspy_rx`).
+- The installer sets up an RTL-SDR only; `--soapy` needs SoapySDR and the radio's module installed by
+  hand for now.
 - `sig_level` and `noise_level` are not in the JSON. The receiver measures SNR only, which is in
   `snr`.
 - The air/ground status bit is read but untested: no capture has an aircraft on the ground.
