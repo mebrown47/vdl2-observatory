@@ -17,8 +17,9 @@ You need:
 - **A computer** running Ubuntu or Debian (or a system based on them), connected to the
   internet. It's been tested most on Ubuntu 22.04. It doesn't need much power: the receiver
   uses about a seventh of one processor core on a small PC.
-- **An RTL-SDR dongle** plugged into a USB port, such as an RTL-SDR Blog V3. (The Blog V4 needs its maker's own
-  driver, which the installer doesn't set up.)
+- **A radio** plugged into a USB port: an RTL-SDR dongle such as an RTL-SDR Blog V3, or a
+  HackRF, Airspy R2 or Airspy HF+. (The Blog V4 needs its maker's own driver, which the
+  installer doesn't set up.) This guide says "dongle" for any of them.
 - **A VHF airband antenna** connected to the dongle, outdoors or as high as you can get it.
   An antenna for 118-137 MHz is ideal; a 1090 MHz ADS-B antenna will hear very little.
 - **Your password** for this computer. The installer will ask for it.
@@ -83,11 +84,11 @@ Partway through, the installer asks a few questions. Each one shows a suggested 
 
 | The installer asks | What it means | If unsure |
 |---|---|---|
-| **Which one** | Which dongle to use, from a numbered list (only asked if you have more than one) | Press Enter for the first one |
+| **Which one** | Which radio to use, from a numbered list (only asked if you have more than one) | Press Enter for the first one |
 | **Channel plan, us or eu** | Which set of VDL2 frequencies to listen to | `us` in North America, `eu` in Europe |
-| **Tuner gain in dB, or auto** | How much the dongle amplifies the signal | Press Enter (auto) |
+| **Tuner gain in dB, or auto** (for a HackRF or Airspy: **Gain: auto, dB, or stages by name**) | How much the dongle amplifies the signal | Press Enter. A HackRF has no automatic gain, so it suggests `LNA=32,VGA=20` |
 | **Frequency correction in ppm** | How far off frequency your dongle is | Press Enter (0) for now; see Step 9 |
-| **Power an LNA through the dongle's bias tee** | Whether the dongle sends power up the antenna cable to an amplifier | Type `y` only if your antenna has an amplifier that needs power from the cable |
+| **Power an LNA through the radio's bias tee** | Whether the dongle sends power up the antenna cable to an amplifier | Type `y` only if your antenna has an amplifier that needs power from the cable |
 | **Feed frames over UDP** | Share the messages you receive with other sites or programs, such as a local acarshub or an aggregator. Give each one as `HOST:PORT`, with spaces between | Press Enter (none), or the addresses the site gave you |
 | **Station ID for your feeds** | A name for your station on those sites, such as `XYZ-VDL2` (only asked if you feed) | Your choice, or Enter for none |
 | **Aircraft positions as SBS/BaseStation** | Send aircraft positions to a map program such as tar1090 or Virtual Radar Server | Press Enter (none) |
@@ -145,7 +146,7 @@ Open a terminal and go into the folder first (`cd vdl2-observatory`), then:
 
 **"Permission denied" when running `./install.sh`:** type `bash install.sh` instead.
 
-**The installer says "no RTL-SDR on USB":** check the dongle is plugged in, unplug it and
+**The installer says "no RTL-SDR on USB"** (or HackRF, Airspy): check the dongle is plugged in, unplug it and
 plug it back in, then run `sudo systemctl start vdl2-sniffer`.
 
 **The live page shows no messages after an hour:** check the antenna is connected and

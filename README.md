@@ -18,7 +18,8 @@ and now stands alone; it needs no Iridium hardware or software.
 
 New to Linux or SDR? [QUICKSTART.md](QUICKSTART.md) walks through it step by step.
 
-On Debian, Ubuntu or Raspberry Pi OS, with an RTL-SDR plugged in:
+On Debian, Ubuntu or Raspberry Pi OS, with the radio plugged in (an RTL-SDR, or a HackRF, Airspy R2
+or Airspy HF+ through SoapySDR):
 
 ```bash
 git clone https://github.com/mebrown47/vdl2-observatory.git
@@ -27,9 +28,10 @@ cd vdl2-observatory
 ```
 
 Run it as your normal user; it uses sudo when it needs to. It installs the packages (and builds
-libacars from source where the distro has none), builds and tests vdl2-sniffer, lets the plugdev
-group open the dongle, asks a few questions (which dongle, channel plan, gain, a feed and station
-id), and installs three services that start at boot:
+libacars from source where the distro has none, and the Airspy HF+'s SoapySDR module, which no
+distro packages), builds and tests vdl2-sniffer, lets the plugdev group open the radio, asks a few
+questions (which radio, channel plan, gain, a feed and station id), and installs three services
+that start at boot:
 
 | Service | What it is |
 | --- | --- |
@@ -52,7 +54,7 @@ A receiver set up by hand with the user units in `systemd/` is taken over: the i
 settings, copies its archive, and stops and removes its user units (keeping copies).
 
 When something isn't working, `./diagnose.sh` writes one text file with what's needed to
-troubleshoot it: versions, the dongle and its permissions, service state, what the live page and the
+troubleshoot it: versions, the radio and its permissions, SoapySDR's modules, service state, what the live page and the
 Observatory answer, and recent logs. It changes nothing. The file holds your settings and the stations
 you hear, so look it over before posting it publicly.
 
@@ -65,7 +67,10 @@ cmake --build build -j
 sudo cmake --install build      # optional: /usr/local/bin and the fix list
 ```
 
-`rtl-sdr` brings the udev rules that let the plugdev group open the dongle. libacars-2 is optional. With it, multi-block ACARS messages are reassembled and FANS-1/A (CPDLC,
+`rtl-sdr` brings the udev rules that let the plugdev group open the dongle. SoapySDR is optional,
+for `--soapy`: `libsoapysdr-dev` and the radio's module (`soapysdr-module-hackrf`,
+`soapysdr-module-airspy`; for the Airspy HF+, `libairspyhf-dev` and
+[SoapyAirspyHF](https://github.com/pothosware/SoapyAirspyHF) built from source). libacars-2 is optional. With it, multi-block ACARS messages are reassembled and FANS-1/A (CPDLC,
 ADS-C) and MIAM are decoded. Without it, the engine still decodes and logs every ACARS block.
 
 ## Run
@@ -257,8 +262,6 @@ dashboard estimates each station's position instead, from the positions of aircr
 
 ## Known gaps
 
-- The installer sets up an RTL-SDR only; `--soapy` needs SoapySDR and the radio's module installed by
-  hand for now.
 - `sig_level` and `noise_level` are not in the JSON. The receiver measures SNR only, which is in
   `snr`.
 - The air/ground status bit is read but untested: no capture has an aircraft on the ground.

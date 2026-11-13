@@ -69,17 +69,26 @@ double chooseRate(const SoapySDR::RangeList& ranges, double need, double outRate
 
 }  // namespace
 
+// One radio per line: the arguments that pick it for --soapy (driver, serial,
+// then any other key a value without spaces), two spaces, its label. The
+// installer reads this.
 void soapyList(FILE* out) {
     SoapySDR::setLogLevel(SOAPY_SDR_WARNING);
     for (const auto& k : SoapySDR::Device::enumerate()) {
         std::string s;
-        for (const auto& kv : k) {
-            if (kv.first == "label") continue;
+        auto add = [&](const std::string& key) {
+            auto it = k.find(key);
+            if (it == k.end() || it->second.empty() || it->second.find(' ') != std::string::npos) return;
             if (!s.empty()) s += ",";
-            s += kv.first + "=" + kv.second;
-        }
+            s += key + "=" + it->second;
+        };
+        add("driver");
+        add("serial");
+        if (k.find("serial") == k.end())
+            for (const auto& kv : k)
+                if (kv.first != "driver" && kv.first != "label") add(kv.first);
         auto l = k.find("label");
-        fprintf(out, "  %s%s%s\n", s.c_str(), l != k.end() ? "  " : "", l != k.end() ? l->second.c_str() : "");
+        fprintf(out, "%s%s%s\n", s.c_str(), l != k.end() ? "  " : "", l != k.end() ? l->second.c_str() : "");
     }
 }
 

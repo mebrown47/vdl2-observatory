@@ -4,9 +4,9 @@
 #
 # diagnose.sh — gather what's needed to troubleshoot a vdl2-observatory
 # install into one text file: OS and tool versions, which libraries the
-# receiver really loads, RTL-SDR permissions and udev rules, service state,
-# ports, the live page's and the Observatory's answers, data folders, and
-# recent logs.
+# receiver really loads, the radios on USB with their permissions and udev
+# rules, SoapySDR's modules and the radios it sees, service state, ports, the
+# live page's and the Observatory's answers, data folders, and recent logs.
 #
 # Usage (from the repo checkout, as your normal user; changes nothing):
 #     ./diagnose.sh                write diagnose-<host>-<UTC time>.txt here
@@ -88,43 +88,60 @@ run "git -C '$REPO_ROOT' describe --always --dirty --tags; git -C '$REPO_ROOT' l
 run "cat $CONF 2>/dev/null || echo 'no $CONF'"
 run "ls -la $PREFIX $PREFIX/bin $PREFIX/observatory 2>/dev/null | head -40"
 if [ -f "$REPO_ROOT/build-install.log" ]; then
-  run "grep -Ei 'rtlsdr|libacars|not found|NOTFOUND|Found ' '$REPO_ROOT/build-install.log' | head -20"
+  run "grep -Ei 'rtlsdr|soapy|libacars|not found|NOTFOUND|Found ' '$REPO_ROOT/build-install.log' | head -20"
 fi
 [ -f "$REPO_ROOT/build-install/tests.log" ] && run "tail -5 '$REPO_ROOT/build-install/tests.log'"
 
 section "Libraries"
 note "Which copy of each library the receiver loads; a second copy elsewhere"
 note "(e.g. /usr/local from source vs /usr/lib from apt) is a common conflict."
-run "ldd '$SNIFFER_BIN' 2>&1 | grep -Ei 'rtlsdr|acars|usb|not found'"
-run "for l in librtlsdr libacars-2 libusb-1.0; do ls -la /usr/lib/x86_64-linux-gnu/\$l.so* /usr/lib/aarch64-linux-gnu/\$l.so* /usr/lib/arm-linux-gnueabihf/\$l.so* /usr/lib/\$l.so* /usr/local/lib/\$l.so* /usr/local/lib64/\$l.so* 2>/dev/null; done; true"
-run "for m in librtlsdr libacars-2 libusb-1.0; do printf '%-12s ' \$m; pkg-config --modversion \$m 2>&1; done"
-run "dpkg -l 2>/dev/null | grep -Ei 'rtl-?sdr|acars' | awk '{print \$1, \$2, \$3}'"
+run "ldd '$SNIFFER_BIN' 2>&1 | grep -Ei 'rtlsdr|soapy|acars|usb|not found'"
+run "for l in librtlsdr libSoapySDR libairspy libairspyhf libhackrf libacars-2 libusb-1.0; do ls -la /usr/lib/x86_64-linux-gnu/\$l.so* /usr/lib/aarch64-linux-gnu/\$l.so* /usr/lib/arm-linux-gnueabihf/\$l.so* /usr/lib/\$l.so* /usr/local/lib/\$l.so* /usr/local/lib64/\$l.so* 2>/dev/null; done; true"
+run "for m in librtlsdr SoapySDR libairspy libairspyhf libhackrf libacars-2 libusb-1.0; do printf '%-12s ' \$m; pkg-config --modversion \$m 2>&1; done"
+run "dpkg -l 2>/dev/null | grep -Ei 'rtl-?sdr|soapy|airspy|hackrf|acars' | awk '{print \$1, \$2, \$3}'"
 
-section "RTL-SDR and permissions"
-note "The service runs as its user with group plugdev: each dongle's node must"
+section "Radios and permissions"
+note "The service runs as its user with group plugdev: each radio's node must"
 note "be group plugdev and group-writable (or world-writable). The DVB-T kernel"
-note "driver is detached by librtlsdr when the receiver opens the dongle."
+note "driver is detached by librtlsdr when the receiver opens an RTL-SDR."
 {
-  printf '\n$ (RTL-SDR device nodes)\n'
+  printf '\n$ (radio device nodes)\n'
   found=0
   for d in /sys/bus/usb/devices/*; do
     [ -r "$d/idVendor" ] || continue
     id="$(<"$d/idVendor"):$(<"$d/idProduct")"
-    case "$id" in 0bda:2832|0bda:2838) ;; *) continue;; esac
+    case "$id" in
+      0bda:2832|0bda:2838) kind=RTL-SDR;;
+      1d50:6089|1d50:604b|1d50:cc15) kind=HackRF;;
+      1d50:60a1) kind="Airspy R2/Mini";;
+      03eb:800c) kind="Airspy HF+";;
+      *) continue;;
+    esac
     found=1
     node="$(printf '/dev/bus/usb/%03d/%03d' "$(<"$d/busnum")" "$(<"$d/devnum")")"
     g="$(stat -c %G "$node" 2>/dev/null)"; m="$(stat -c %a "$node" 2>/dev/null)"
     if { [ "$g" = plugdev ] && (( 8#${m:-0} & 8#020 )); } || (( 8#${m:-0} & 8#002 )); then v=OK; else v="PROBLEM: the service can't open it"; fi
-    printf '%s  %s  group %s mode %s  %s  [%s, serial %s]\n' "$id" "$node" "$g" "$m" "$v" \
+    printf '%s  %s  %s  group %s mode %s  %s  [%s, serial %s]\n' "$kind" "$id" "$node" "$g" "$m" "$v" \
       "$(cat "$d/product" 2>/dev/null)" "$(cat "$d/serial" 2>/dev/null || echo -)"
   done
-  [ $found = 1 ] || echo "no RTL-SDR on USB"
+  [ $found = 1 ] || echo "no RTL-SDR, HackRF or Airspy on USB"
 } >> "$OUT" 2>&1
 RULE_DIRS="$(for r in /etc/udev/rules.d /usr/lib/udev/rules.d /lib/udev/rules.d; do [ -d "$r" ] && readlink -f "$r"; done | awk '!seen[$0]++' | tr '\n' ' ')"
-run "for r in $RULE_DIRS; do grep -sHn -Ei '0bda.*283[28]|283[28].*0bda|rtl' \$r/*.rules; done | head -20"
+note ""
+note "udev rules naming these radios: the last to set GROUP/MODE wins, unless"
+note "one assigns with := (the installer's 52-vdl2-observatory-sdr.rules does)."
+run "for r in $RULE_DIRS; do grep -sHn -Ei '0bda.*283[28]|283[28].*0bda|1d50.*(6089|604b|cc15|60a1)|03eb.*800c' \$r/*.rules; done | head -30"
 run "lsmod | grep -E '^(dvb_usb_rtl28xxu|rtl2832|rtl2830)' || echo 'no DVB-T driver loaded'"
 run "getent group plugdev; svc_user=\$(systemctl show -p User --value vdl2-sniffer 2>/dev/null); [ -n \"\$svc_user\" ] && echo \"service user: \$svc_user (\$(id -nG \$svc_user 2>/dev/null))\"; true"
-run "pgrep -a -f 'rtl_tcp|rtl_sdr|rtl_fm|dumpvdl2|acarsdec|dump1090|readsb' || echo 'no other dongle programs running'"
+run "pgrep -a -f '[r]tl_tcp|[r]tl_sdr|[r]tl_fm|[d]umpvdl2|[a]carsdec|[d]ump1090|[r]eadsb|[a]irspy_rx|[a]irspyhf_rx|[h]ackrf_transfer|[S]oapySDRServer|[i]ridium-sniffer' || echo 'no other radio programs running'"
+
+section "SoapySDR"
+note "For --soapy (HackRF, Airspy R2, Airspy HF+). The HF+ module is built from"
+note "source by the installer (no distro package) into /usr/local. A radio the"
+note "receiver has open may be missing from the list below."
+run "if [ ! -x '$SNIFFER_BIN' ]; then echo 'no receiver at $SNIFFER_BIN'; elif ldd '$SNIFFER_BIN' 2>/dev/null | grep -q libSoapySDR; then echo 'receiver built with SoapySDR'; else echo 'receiver built WITHOUT SoapySDR: --soapy unavailable (install libsoapysdr-dev, re-run ./install.sh --update)'; fi"
+run "SoapySDRUtil --info 2>&1 | grep -Ei 'version|search path|module found|factories'"
+[ -x "$SNIFFER_BIN" ] && run "'$SNIFFER_BIN' --soapy list 2>&1 | grep -v '^\\[INFO\\]'"
 
 section "Services"
 for u in vdl2-sniffer.service vdl2-observatory.service vdl2-rollup.service vdl2-rollup.timer; do
@@ -137,7 +154,7 @@ run "systemctl $SCOPE list-timers --all --no-pager 2>/dev/null | grep -Ei 'vdl2|
 if [ -z "$SCOPE" ] && systemctl --user cat vdl2-sniffer.service >/dev/null 2>&1; then
   note ""
   note "NOTE: a user unit vdl2-sniffer.service exists too (a receiver set up by hand);"
-  note "both can't hold the dongle. Re-running ./install.sh takes it over."
+  note "both can't hold the radio. Re-running ./install.sh takes it over."
 fi
 
 section "Ports"
@@ -192,7 +209,7 @@ note "or run: sudo journalctl -u vdl2-sniffer -n 120"
 run "$JOURNAL -u vdl2-sniffer -n 120 --no-pager 2>&1"
 run "$JOURNAL -u vdl2-observatory -n 40 --no-pager 2>&1"
 run "$JOURNAL -u vdl2-rollup -n 20 --no-pager 2>&1"
-run "dmesg 2>/dev/null | grep -Ei 'usb.*(0bda|rtl|2838|2832)|usb.*(error|disconnect|reset)' | tail -20 || echo 'dmesg not readable as this user'"
+run "dmesg 2>/dev/null | grep -Ei 'usb.*(0bda|rtl|2838|2832|1d50|03eb|airspy|hackrf)|usb.*(error|disconnect|reset)' | tail -20 || echo 'dmesg not readable as this user'"
 
 echo
 echo "Done: $OUT ($(wc -l < "$OUT") lines)"
