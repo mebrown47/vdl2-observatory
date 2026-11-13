@@ -42,13 +42,16 @@ std::string mhz(double hz) {
 // The rate to run the radio at. 1.05 MS/s itself when the radio has it (no
 // conversion beyond a shift); otherwise the lowest it offers that holds the
 // channels, preferring a whole multiple of 1.05 MS/s where it can be set
-// freely (the converter's last step is then exact). A HackRF is kept at
-// 2 MS/s or more: below that its own filters alias.
+// freely (the converter's last step is then exact). Never much below the
+// output rate: interpolating up from a rate whose band edge is near the
+// channels (the HF+'s 456 kS/s) is where the radio's filter and the cubic
+// step are both worst. A HackRF is kept at 2 MS/s or more: below that its
+// own filters alias.
 double chooseRate(const SoapySDR::RangeList& ranges, double need, double outRate, double floor) {
     if (floor <= outRate)
         for (const auto& r : ranges)
             if (outRate >= r.minimum() - 0.5 && outRate <= r.maximum() + 0.5) return outRate;
-    const double lowest = std::max(need, floor);
+    const double lowest = std::max({need, floor, 0.85 * outRate});
     double best = 0;
     for (const auto& r : ranges) {
         double c;
