@@ -24,6 +24,7 @@ find_package(PkgConfig)
 
 add_executable(vdl2-sniffer
     vdl2_sniffer.cc
+    rate_converter.cc
     vdl2_xid.cc
     acars_position.c
     waypoint_db.c

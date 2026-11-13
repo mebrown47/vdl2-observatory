@@ -20,6 +20,7 @@
 
 #include "acars_position.h"
 #include "basestation.h"
+#include "rate_converter.hh"
 #include "web.hh"
 #include "waypoint_db.h"
 
@@ -390,65 +391,6 @@ static std::string trimPad(const std::string& s, char pad) {
     return a == std::string::npos ? "" : s.substr(a, b - a + 1);
 }
 
-/* ---------- resampler ---------- */
-
-// Mix by -shift Hz and resample from inRate to outRate with a windowed-sinc
-// interpolator (Blackman, 1024 phases), centred on each output instant: no
-// delay, so output sample j is the input at j / outRate. From
-// iridium-analyzer's vdl2dec.
-class Resampler {
-public:
-    Resampler(double inRate, double outRate, double shiftHz) {
-        step_ = inRate / outRate;
-        const double fc = 0.45 * std::min(1.0, outRate / inRate);
-        half_ = (int)std::ceil(16.0 / (2.0 * fc));
-        table_.resize((size_t)(2 * half_ + 1) * kPhases + 1);
-        for (size_t i = 0; i < table_.size(); i++) {
-            const double x = (double)i / kPhases - half_;
-            const double s = x == 0 ? 2 * fc : std::sin(2 * M_PI * fc * x) / (M_PI * x);
-            const double w = 0.42 + 0.5 * std::cos(M_PI * x / (half_ + 1)) + 0.08 * std::cos(2 * M_PI * x / (half_ + 1));
-            table_[i] = (float)(s * w);
-        }
-        rot_ = std::polar(1.0, -2 * M_PI * shiftHz / inRate);
-    }
-    void process(const cf* x, size_t n, std::vector<cf>& out) {
-        for (size_t i = 0; i < n; i++) {
-            buf_.push_back(cf((float)(x[i].real() * ph_.real() - x[i].imag() * ph_.imag()),
-                              (float)(x[i].real() * ph_.imag() + x[i].imag() * ph_.real())));
-            ph_ *= rot_;
-            if ((++count_ & 1023) == 0) ph_ /= std::abs(ph_);
-        }
-        while (next_ + half_ + 1 < (double)(base_ + buf_.size())) {
-            const double rel = next_ - base_;
-            const long c = (long)std::floor(rel);
-            const double frac = rel - c;
-            cf acc{0, 0};
-            for (int k = -half_; k <= half_; k++) {
-                const long idx = c + k;
-                if (idx < 0) continue;
-                const double x = (frac - k + half_) * kPhases;
-                const size_t ti = (size_t)x;
-                const float w = table_[ti] + (table_[ti + 1] - table_[ti]) * (float)(x - ti);
-                acc += buf_[(size_t)idx] * w;
-            }
-            out.push_back(acc);
-            next_ += step_;
-        }
-        const long keepFrom = (long)std::floor(next_ - base_) - half_ - 1;
-        if (keepFrom > 4096) { buf_.erase(buf_.begin(), buf_.begin() + keepFrom); base_ += keepFrom; }
-    }
-private:
-    static constexpr int kPhases = 1024;
-    double step_;
-    int half_;
-    std::vector<float> table_;
-    std::complex<double> ph_{1, 0}, rot_;
-    uint64_t count_ = 0;
-    std::vector<cf> buf_;
-    long base_ = 0;
-    double next_ = 0;
-};
-
 /* ---------- archive ---------- */
 
 // vdl2-YYYYMMDD.jsonl beside iridium-YYYYMMDD.jsonl, one file per UTC day
@@ -778,8 +720,14 @@ int main(int argc, char** argv) {
     // As it is when the rate is right and the centre keeps every mixer exact.
     const bool asIs = std::fabs(o.rate - decRate) < 0.5 && std::fabs(std::remainder(o.centre - lo, 12500.0)) < 0.5;
     const double decCentre = asIs ? o.centre : planCentre;
-    std::unique_ptr<Resampler> rs;
-    if (!asIs) rs.reset(new Resampler(o.rate, decRate, decCentre - o.centre));
+    std::unique_ptr<RateConverter> rs;
+    if (!asIs) {
+        // The farthest channel edge from the centre (a VDL2 channel is 25 kHz wide).
+        double pass = 0;
+        for (double c : o.channels) pass = std::max(pass, std::fabs(c - decCentre) + 12500.0);
+        rs.reset(new RateConverter(o.rate, decRate, decCentre - o.centre, pass));
+        fprintf(stderr, "vdl2-sniffer: input %s\n", rs->describe().c_str());
+    }
 
     std::vector<std::unique_ptr<V::Decoder>> decs;
     for (double c : o.channels) decs.emplace_back(new V::Decoder(decCentre, std::vector<double>{c}));
