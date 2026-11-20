@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
-project(vdl2-sniffer VERSION 0.1 LANGUAGES C CXX)
+# The release version: bump it with each release tag. Builds from a git
+# checkout report `git describe` instead (cmake/version.cmake).
+project(vdl2-sniffer VERSION 1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,9 +50,18 @@ string(SUBSTRING ${VDL2_OUTLINES_MD5} 0 10 VDL2_MAP_VERSION)
 # binary finds its own copy in ../share/vdl2-sniffer first.
 target_compile_definitions(vdl2-sniffer PRIVATE
     VDL2_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
-    VDL2_SNIFFER_VERSION="${PROJECT_VERSION}"
     VDL2_MAP_VERSION="${VDL2_MAP_VERSION}")
 target_link_libraries(vdl2-sniffer PRIVATE Threads::Threads)
+# vdl2_version.h: regenerated on every build, so a git pull and rebuild picks
+# up the new version without re-running cmake.
+add_custom_target(vdl2_version_header
+    COMMAND ${CMAKE_COMMAND} -DSRC=${PROJECT_SOURCE_DIR}
+            -DOUT=${PROJECT_BINARY_DIR}/vdl2_version.h
+            -DFALLBACK=${PROJECT_VERSION}
+            -P ${PROJECT_SOURCE_DIR}/cmake/version.cmake
+    BYPRODUCTS ${PROJECT_BINARY_DIR}/vdl2_version.h
+    COMMENT "Checking the program version")
+add_dependencies(vdl2-sniffer vdl2_version_header)
 
 # libacars-2: multi-block reassembly and FANS-1/A, MIAM decoding (optional)
 if(PkgConfig_FOUND)

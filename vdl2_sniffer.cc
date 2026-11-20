@@ -60,9 +60,7 @@
 #include <thread>
 #include <vector>
 
-#ifndef VDL2_SNIFFER_VERSION
-#define VDL2_SNIFFER_VERSION "0.1"
-#endif
+#include "vdl2_version.h"   // VDL2_SNIFFER_VERSION: git describe, or the release
 
 namespace V = Jetstream::Vdl2Receiver;
 using cf = std::complex<float>;
@@ -131,8 +129,10 @@ struct Options {
 };
 
 static void usage(FILE* out) {
+    fprintf(out, "vdl2-sniffer %s\n", VDL2_SNIFFER_VERSION);
     fprintf(out,
         "usage: vdl2-sniffer [options]\n"
+        "      --version         print the version and exit\n"
         "  -r, --input FILE      IQ file, or - for stdin (default -)\n"
         "      --rtlsdr [DEV]    read an RTL-SDR directly: device index or serial (default 0)\n"
         "      --soapy [ARGS]    read a radio through SoapySDR (HackRF, Airspy R2, Airspy HF+,\n"
@@ -221,6 +221,7 @@ static bool parseOptions(int argc, char** argv, Options& o) {
             else val = dflt;
         };
         if (k == "-h" || k == "--help") { usage(stdout); exit(0); }
+        else if (k == "--version") { printf("vdl2-sniffer %s\n", VDL2_SNIFFER_VERSION); exit(0); }
         else if (k == "-r" || k == "--input") { if (!need()) return false; o.input = val; }
         else if (k == "--rtlsdr") { maybe("0"); o.rtlsdr = val; }
         else if (k == "--soapy") { maybe(""); o.soapy = true; o.soapyArgs = val; }
@@ -755,6 +756,7 @@ private:
 int main(int argc, char** argv) {
     Options o;
     if (!parseOptions(argc, argv, o)) return 2;
+    if (!o.printCentre) fprintf(stderr, "vdl2-sniffer %s\n", VDL2_SNIFFER_VERSION);
 
     const double lo = o.channels.front(), hi = o.channels.back();
     const double planCentre = std::round((lo + hi) / 2 / 12500.0) * 12500.0;

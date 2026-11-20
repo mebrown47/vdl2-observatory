@@ -50,6 +50,10 @@ edit); program files in `/opt/vdl2-observatory`; the archive and database in
 ./install.sh --dry-run       # show what it would do as root, change nothing
 ```
 
+The version you're running is at the foot of the live page and the Observatory, in
+`vdl2-sniffer --version`, and in the first line of its log: `v1.0` on a release, `v1.0-3-g4f31b44`
+three commits after it.
+
 A receiver set up by hand with the user units in `systemd/` is taken over: the installer offers its
 settings, copies its archive, and stops and removes its user units (keeping copies).
 

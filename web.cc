@@ -6,6 +6,7 @@
  */
 
 #include "web.hh"
+#include "vdl2_version.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -381,8 +382,10 @@ void Server::handle(int fd) {
         // has an older copy cached fetches the new one.
         static const std::string page = [] {
             std::string p = kPage;
-            const std::string mark = "__MAP_V__";
-            for (size_t at; (at = p.find(mark)) != std::string::npos;) p.replace(at, mark.size(), VDL2_MAP_VERSION);
+            const std::pair<std::string, std::string> marks[] = {{"__MAP_V__", VDL2_MAP_VERSION},
+                                                                 {"__VERSION__", VDL2_SNIFFER_VERSION}};
+            for (const auto& m : marks)
+                for (size_t at; (at = p.find(m.first)) != std::string::npos;) p.replace(at, m.first.size(), m.second);
             return p;
         }();
         body = page;
@@ -474,6 +477,9 @@ const char kPage[] = R"PAGE(<!doctype html>
   .albl{fill:#c9d1d9;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   .key{color:var(--dim);font-size:11.5px;margin-top:6px}
   .key i{display:inline-block;width:9px;height:9px;margin:0 4px 0 10px;vertical-align:middle}
+  footer{color:var(--dim);font-size:11.5px;text-align:center;margin:18px 0 22px}
+  footer a{color:inherit;text-decoration:none}
+  footer a:hover{text-decoration:underline}
 </style></head>
 <body>
 <header>
@@ -717,6 +723,7 @@ function map(now,A){
 let rt=null;window.addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>{if(D)render();},200);});
 load();setInterval(load,3000);
 </script>
+<footer><a href="https://github.com/mebrown47/vdl2-observatory/releases" target="_blank" rel="noopener">vdl2-observatory __VERSION__</a></footer>
 </body></html>
 )PAGE";
 

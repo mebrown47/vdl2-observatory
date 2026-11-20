@@ -24,8 +24,10 @@ It never talks to vdl2-sniffer; run rollup.py on a timer to keep it current.
 
 import argparse
 import hashlib
+import html as htmllib
 import json
 import os
+import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -60,6 +62,35 @@ def map_version():
 _map_v = {}
 
 
+def running_version():
+    """The version of the code this server runs: the VERSION file install.sh
+    writes beside observatory/, else `git describe` of the checkout it runs
+    from (as the receiver reports it), else "unknown"."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        with open(os.path.join(here, "..", "VERSION")) as f:
+            v = f.read().strip()
+        if v:
+            return v
+    except OSError:
+        pass
+    try:
+        v = subprocess.run(["git", "-C", here, "describe", "--tags", "--always", "--dirty"],
+                           capture_output=True, text=True, timeout=5).stdout.strip()
+        if v:
+            return v
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "unknown"
+
+
+VERSION = running_version()   # read once: the version of the code now running
+FOOTER = ('<footer style="color:var(--dim,#8b98a5);font-size:11.5px;text-align:center;'
+          'margin:18px 0 22px"><a href="https://github.com/mebrown47/vdl2-observatory/releases" '
+          'target="_blank" rel="noopener" style="color:inherit;text-decoration:none">'
+          'vdl2-observatory ' + htmllib.escape(VERSION) + '</a></footer>\n')
+
+
 class Handler(BaseHTTPRequestHandler):
     db_path = DB_PATH
     live_port = LIVE_PORT
@@ -80,7 +111,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _page(self, html):
-        return html.replace("__LIVE_PORT__", str(self.live_port)).replace("__MAP_V__", map_version())
+        html = html.replace("__LIVE_PORT__", str(self.live_port)).replace("__MAP_V__", map_version())
+        head, sep, tail = html.rpartition("</body>")
+        return head + FOOTER + sep + tail if sep else html
 
     def _json(self, build, *a):
         try:
