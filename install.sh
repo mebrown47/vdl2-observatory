@@ -161,7 +161,12 @@ usb_kinds() {
     esac
   done
 }
-soapy_has_module() { have SoapySDRUtil && SoapySDRUtil --info 2>/dev/null | grep -q "lib${1}Support"; }
+# Is a radio of this kind on USB? Not "usb_kinds | grep -q": under pipefail,
+# grep leaving at the first match fails the pipeline when a second radio's line
+# is still to come (SIGPIPE), which made it report no RTL-SDR with an RTL-SDR and
+# an Airspy plugged in.
+has_kind() { grep -qx "$1" <<<"$(usb_kinds)"; }
+soapy_has_module() { have SoapySDRUtil && grep -q "lib${1}Support" <<<"$(SoapySDRUtil --info 2>/dev/null)"; }
 
 # The Airspy HF+'s SoapySDR module: in no Debian/Ubuntu release, so built
 # from source (libairspyhf itself is packaged).
@@ -215,7 +220,7 @@ if [ "$DEPS" -eq 1 ]; then
     if as_root apt-get install -y -q --no-install-recommends "${SOAPY[@]}"; then
       ok "SoapySDR installed, with the HackRF, Airspy R2 and RTL-SDR modules"
       # An HF+ plugged in now, or in the settings: its module too.
-      if usb_kinds | grep -qx airspyhf || grep -qs 'driver=airspyhf' "$CONF"; then
+      if has_kind airspyhf || grep -qs 'driver=airspyhf' "$CONF"; then
         install_soapy_airspyhf
       fi
     else
@@ -688,7 +693,7 @@ case "$VDL2_ARGS" in
   *)                         want=rtlsdr;;
 esac
 NO_SDR=0
-if { [ "$want" = any ] && [ -n "$(usb_kinds)" ]; } || usb_kinds | grep -qx "$want"; then
+if { [ "$want" = any ] && [ -n "$(usb_kinds)" ]; } || has_kind "$want"; then
   as_root systemctl restart vdl2-sniffer.service
   ok "vdl2-sniffer enabled and (re)started"
 else
@@ -750,6 +755,6 @@ say "  Observatory:  ${B}http://$IP:$OBS_PORT/${Z}   (fills in as the rollup run
 say "  Settings:     $CONF  then  sudo systemctl restart vdl2-sniffer"
 say "  Logs:         journalctl -u vdl2-sniffer -f"
 say "  Update:       ./install.sh --update"
-if have ufw && [ "$DRY_RUN" -eq 0 ] && sudo ufw status 2>/dev/null | grep -q '^Status: active'; then
+if have ufw && [ "$DRY_RUN" -eq 0 ] && grep -q '^Status: active' <<<"$(sudo ufw status 2>/dev/null)"; then
   warn "ufw is active — for LAN access:  sudo ufw allow $WEB_PORT/tcp && sudo ufw allow $OBS_PORT/tcp"
 fi
