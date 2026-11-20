@@ -101,6 +101,7 @@ Other rates and centres are mixed and resampled, so 2.5 MS/s from an Airspy R2 a
 | `-r FILE` / `-` | IQ file or stdin; `--format cu8\|cs8\|ci16\|cf32` (from the extension by default, cu8 on stdin) |
 | `-s HZ`, `-c HZ` | input rate (default 1050000) and centre (default: the plan's centre). Any rate is converted to 1.05 MS/s |
 | `--stall-exit S` | watchdog for live input (a radio or stdin): when no samples have been decoded for S seconds, log whether the radio went silent or the decoder stuck, and exit with status 3 so the service restarts it (default 60; 0 = never). A working RTL-SDR delivers samples every 31 ms however quiet the channels are, so a minute with none is a hang. Also ends a shutdown that hangs in the driver for more than 10 s |
+| `--wait-for-radio` | a radio that isn't there or won't open is tried again after 10 s, 20 s, 40 s ... up to every 5 minutes, instead of exiting. The service units use it, so an unplugged radio costs a log line every few minutes rather than a restart every 10 s, and is picked up when it's plugged back in |
 | `--plan us\|eu`, `--channels LIST` | channel plan, or channels in MHz or Hz |
 | `--start TIME` | capture start for a file: epoch, `YYYY-MM-DD HH:MM:SS` local, or `...Z` UTC. Default: the file's mtime minus its length |
 | `--json [FILE]` | one dumpvdl2-style JSON object per frame (stdout by default); `--raw` adds the AVLC octets. XID frames use dumpvdl2's layout (`pub_params`, `vdl_params`), which feed parsers such as acars_router require; on the ten captures every frame passes acars_vdlm2_parser |
