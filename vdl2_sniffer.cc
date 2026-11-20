@@ -124,6 +124,7 @@ struct Options {
     int obsPort = 8891;              // the Observatory the live page links to; 0 no link
     double maxSeconds = 0;
     int stallExit = 60;              // live input: exit after this many seconds without samples; 0 never
+    bool waitForRadio = false;       // a radio that won't open: retry with backoff instead of exiting
     bool printCentre = false;
     bool raw = false;                // AVLC octets in the JSON, for A/B checks
     bool quiet = false;
@@ -173,6 +174,10 @@ static void usage(FILE* out) {
         "      --stall-exit S    live input (a radio or stdin): exit with status 3 when no\n"
         "                        samples have been decoded for S seconds, so a service\n"
         "                        manager restarts it (default 60; 0 = never)\n"
+        "      --wait-for-radio  a radio that isn't there or won't open is tried again after\n"
+        "                        10 s, 20 s, 40 s ... up to every 5 minutes, instead of exiting\n"
+        "                        (the service units use it, so a missing radio doesn't restart\n"
+        "                        the service every 10 s)\n"
         "      --waypoints FILE  fix list for positions from ACARS text (IDENT,LAT,LON;\n"
         "                        default: the installed waypoints.csv; none = off)\n"
         "  -q, --quiet           no per-frame summary on stdout\n");
@@ -268,6 +273,7 @@ static bool parseOptions(int argc, char** argv, Options& o) {
         }
         else if (k == "--max-seconds") { if (!need()) return false; o.maxSeconds = atof(val.c_str()); }
         else if (k == "--stall-exit") { if (!need()) return false; o.stallExit = atoi(val.c_str()); }
+        else if (k == "--wait-for-radio") o.waitForRadio = true;
         else if (k == "--waypoints") { if (!need()) return false; o.waypoints = val; }
         else if (k == "-q" || k == "--quiet") o.quiet = true;
         else { fprintf(stderr, "vdl2-sniffer: unknown option %s\n", k.c_str()); usage(stderr); return false; }
@@ -556,6 +562,8 @@ public:
     std::atomic<bool> failed{false};    // the device stopped without being asked
 
     FILE* open(const Options& o) {
+        cancelled_ = false;   // (a retry after a failed open)
+        failed = false;
         if (rtlsdr_get_device_count() == 0) {
             fprintf(stderr, "vdl2-sniffer: no RTL-SDR found\n");
             return nullptr;
@@ -757,6 +765,22 @@ int main(int argc, char** argv) {
         return 2;
     }
 #ifdef HAVE_SOAPY
+    // --wait-for-radio (the service units): a radio that isn't there, or won't
+    // open, is tried again after 10 s, 20, 40 ... up to 5 minutes, rather than
+    // exiting for systemd to restart us every 10 s forever. systemd's own
+    // backoff (RestartSteps) needs systemd 254, newer than Ubuntu 22.04's, and
+    // a start limit would give up on a radio plugged in later. Until the
+    // signal handlers are installed below, SIGTERM simply ends the wait.
+    int retryDelay = 10;
+    auto retryRadio = [&]() -> bool {
+        if (!o.waitForRadio || stopRequested) return false;
+        fprintf(stderr, "vdl2-sniffer: trying the radio again in %d s (--wait-for-radio)\n", retryDelay);
+        for (int i = 0; i < retryDelay && !stopRequested; i++) sleep(1);
+        retryDelay = std::min(retryDelay * 2, 300);
+        return !stopRequested;
+    };
+    (void)retryRadio;
+
     // The radio is set up first: its reader thread delivers the decoder's own
     // 1.05 MS/s on the plan's centre, so the rest goes as for a recording.
     SoapyInput soapy;
@@ -766,7 +790,10 @@ int main(int argc, char** argv) {
         so.args = o.soapyArgs; so.gain = o.gain; so.antenna = o.antenna;
         so.rate = o.rateSet ? o.rate : 0; so.centre = o.centre;
         so.ppm = o.ppm; so.biasTee = o.biasTee; so.settings = o.soapySettings;
-        if (!(soapyIn = soapy.open(so, o.channels, planCentre, decRate, &stopRequested))) return 1;
+        while (!(soapyIn = soapy.open(so, o.channels, planCentre, decRate, &stopRequested))) {
+            soapy.stop();
+            if (!retryRadio()) return 1;
+        }
         o.rate = decRate;
         o.centre = planCentre;
     }
@@ -809,7 +836,10 @@ int main(int argc, char** argv) {
 #endif
     } else if (live) {
 #ifdef HAVE_RTLSDR
-        if (!(in = rtl.open(o))) return 1;
+        while (!(in = rtl.open(o))) {
+            rtl.stop();
+            if (!retryRadio()) return 1;
+        }
 #endif
     } else {
         in = o.input == "-" ? stdin : fopen(o.input.c_str(), "rb");

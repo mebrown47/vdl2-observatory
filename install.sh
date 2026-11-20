@@ -352,7 +352,7 @@ if [ -f "$HAND_UNIT" ]; then
   # adds) and the VDL2_ARGS in its settings file.
   exec_line="$(sed -n 's/^ExecStart=//p' "$HAND_UNIT" | head -1)"
   unit_args="$(sed 's/\$VDL2_ARGS//; s/^[^ ]* *//' <<<"$exec_line" \
-    | sed -E 's/(^| )--web(=[^ ]*)?//g; s/(^| )--archive( [^-][^ ]*|=[^ ]*)?//g; s/  */ /g; s/^ //; s/ $//')"
+    | sed -E 's/(^| )--web(=[^ ]*)?//g; s/(^| )--archive( [^-][^ ]*|=[^ ]*)?//g; s/(^| )--wait-for-radio//g; s/  */ /g; s/^ //; s/ $//')"
   # systemd's EnvironmentFile takes VDL2_ARGS=a b c unquoted, which bash
   # can't source: read the value, minus any quotes around it.
   env_args="$(sed -n 's/^[[:space:]]*VDL2_ARGS=//p' "$USER_ENV" 2>/dev/null | tail -1 \
@@ -634,7 +634,7 @@ User=$RUN_USER
 $GROUPS_LINE
 EnvironmentFile=$CONF
 WorkingDirectory=$DATA_DIR
-ExecStart=$PREFIX/bin/vdl2-sniffer \$VDL2_ARGS --web=\${WEB_PORT} --observatory-port=\${OBS_PORT} --archive $ARCHIVE_DIR
+ExecStart=$PREFIX/bin/vdl2-sniffer \$VDL2_ARGS --wait-for-radio --web=\${WEB_PORT} --observatory-port=\${OBS_PORT} --archive $ARCHIVE_DIR
 Restart=always
 RestartSec=10
 

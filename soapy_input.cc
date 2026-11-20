@@ -97,6 +97,9 @@ FILE* SoapyInput::open(const SoapyOptions& o, const std::vector<double>& channel
     o_ = o;
     outRate_ = outRate;
     stop_ = stop;
+    cancelled_ = false;   // (a retry after a failed open)
+    failed = false;
+    rs_.reset();
     SoapySDR::setLogLevel(SOAPY_SDR_WARNING);
     // With no arguments, the first radio: SoapySDR's own first device may be
     // the sound card (its audio module).
@@ -269,7 +272,9 @@ FILE* SoapyInput::open(const SoapyOptions& o, const std::vector<double>& channel
         return nullptr;
     }
     th_ = std::thread([this] { run(); });
-    return fdopen(fd_[0], "rb");
+    FILE* f = fdopen(fd_[0], "rb");
+    fd_[0] = -1;   // the caller's now
+    return f;
 }
 
 void SoapyInput::put(const void* data, size_t bytes) {
@@ -354,6 +359,7 @@ void SoapyInput::stop() {
     }
     stream_ = nullptr;
     if (fd_[1] >= 0) { close(fd_[1]); fd_[1] = -1; }
+    if (fd_[0] >= 0) { close(fd_[0]); fd_[0] = -1; }   // an open that failed after making the pipe
     SoapySDR::Device::unmake(dev_);
     dev_ = nullptr;
 }

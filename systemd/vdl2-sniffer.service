@@ -8,7 +8,7 @@ After=network-online.target
 
 [Service]
 EnvironmentFile=-%h/.config/vdl2-sniffer.env
-ExecStart=%h/vdl2-sniffer/build/vdl2-sniffer --rtlsdr 0 --web --archive %h/vdl2-sniffer/archive $VDL2_ARGS
+ExecStart=%h/vdl2-sniffer/build/vdl2-sniffer --rtlsdr 0 --wait-for-radio --web --archive %h/vdl2-sniffer/archive $VDL2_ARGS
 Restart=always
 RestartSec=10
 
