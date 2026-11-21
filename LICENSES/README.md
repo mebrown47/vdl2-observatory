@@ -13,6 +13,8 @@ still applies to those parts:
 | `data/waypoints.csv`: fixes from Global Aviation Waypoints | MIT | Fayyaz Ali Khan | `MIT-Global-Aviation-Waypoints.txt` |
 | `data/waypoints.csv`: FAA fix positions | public domain (US government work) | | |
 | `data/outlines.json`: map outlines and towns | public domain | Natural Earth | `Natural-Earth.txt` |
+| `observatory/data/airports.csv`: airports | public domain | OurAirports (ourairports.com) | |
+| `observatory/data/navaids.csv`: navaids and fixes | public domain (US government work) | FAA aeronautical data, via iridium-aircraft-geolocation | |
 
 The X-Plane fixes are why the whole program is GPL-3.0, along with the three files from
 iridium-sniffer. The decoder's MIT licence lets it be used under the GPL here, and stays with

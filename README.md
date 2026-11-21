@@ -177,6 +177,20 @@ python3 observatory/server.py --db observatory/observatory.db      # http://HOST
   - handoffs between stations, and aircraft positions
   - the busiest aircraft
 - **Messages** (`/messages`): each aircraft's messages, the CPDLC log and ADS-C.
+- **Flights** (`/flights`): each aircraft heard in the last 2, 6 or 24 hours, with a map.
+  - Its **track** is the positions it reported: XIDs (to 0.1°), ACARS position reports and
+    ADS-C. Points it couldn't have flown between are left out (an intent list's points ahead, an
+    older entry of a position history), and a fix it only named is never a position.
+  - Its **origin and destination** come from its own messages, in seven layouts that airlines
+    use: `TRP KMIA KMSP`, Southwest's `02E21KMCOKOKC`, `LDR01,...,KLAS,KMCO`,
+    `POSRPT 1544/20 KXNA/KTPA`, `POS02,...,KPNS,KFTY`, `190339 KATL KPNS` and
+    `LDG DATA REQ / KDEN KMCO`. Over two days on a feeder, each layout's destination matched
+    the one the same aircraft gave in its XIDs 90-100% of the time. Otherwise the destination
+    is the XID's.
+  - A receiver that hears ground stations also gets their flight plans, ATIS and takeoff data,
+    read by the same rules as iridium-observatory's Flights page (`observatory/context.py`).
+  - Airports and navaids come from `observatory/data/`: OurAirports and FAA data, both public
+    domain, built by `observatory/tools/build_reference_data.py`.
 
 `rollup.py` reads only what was appended since its last run, so run it every few minutes from a
 timer or cron. The server reads the database only and never talks to vdl2-sniffer. Port 8891 is

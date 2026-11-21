@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests that need no captures: positions from ACARS text.
+# Unit tests that need no captures: positions from ACARS text, and the
+# Observatory's Flights data and rollup (Python).
 # The recorded A/B against dumpvdl2 is tests/ab_run.sh.
 #
 #   tests/run_tests.sh [BUILD_DIR]     (default: build)
@@ -25,6 +26,15 @@ while read -r line; do
         FAIL*) fail=$((fail + 1)) ;;
     esac
 done < <("$BUILD/test-acars-position" "$fixes" 2>/dev/null)
+
+echo "== Flights page and rollup =="
+while read -r line; do
+    echo "  $line"
+    case "$line" in
+        PASS*) pass=$((pass + 1)) ;;
+        FAIL*) fail=$((fail + 1)) ;;
+    esac
+done < <(python3 "$HERE/test_flights.py" 2>&1)
 
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

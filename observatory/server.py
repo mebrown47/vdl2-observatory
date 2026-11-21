@@ -24,6 +24,9 @@ It never talks to vdl2-sniffer; run rollup.py on a timer to keep it current.
 
 import argparse
 import hashlib
+import sqlite3
+import threading
+import time
 import html as htmllib
 import json
 import os
@@ -33,6 +36,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import context  # noqa: E402
+import flights  # noqa: E402
+import flights_view  # noqa: E402
 import messages_view  # noqa: E402
 import vdl2_view  # noqa: E402
 
@@ -91,6 +97,39 @@ FOOTER = ('<footer style="color:var(--dim,#8b98a5);font-size:11.5px;text-align:c
           'vdl2-observatory ' + htmllib.escape(VERSION) + '</a></footer>\n')
 
 
+_flights_lock = threading.Lock()
+_flights_ref = None
+_stations = {"t": 0, "v": []}
+
+
+def flights_api(db_path, hours):
+    """/api/flights: the reference data (airports, fixes) is read on first
+    use; the station estimates (all time, every position) every 5 minutes."""
+    global _flights_ref
+    try:
+        hours = max(1, min(48, int(hours)))
+    except (TypeError, ValueError):
+        hours = 6
+    if not os.path.exists(db_path):
+        return {"error": "no database yet — run rollup.py first"}
+    with _flights_lock:
+        if _flights_ref is None:
+            here = os.path.dirname(os.path.abspath(__file__))
+            wp = next((p for p in (os.path.join(here, "..", "data", "waypoints.csv"),
+                                   os.path.join(here, "..", "share", "vdl2-sniffer", "waypoints.csv"))
+                       if os.path.exists(p)), "")
+            _flights_ref = context.Reference(waypoints=wp, aircraft_csv="")
+        if time.time() - _stations["t"] > 300:
+            con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+            try:
+                _stations["v"] = [x for x in vdl2_view.estimate_stations(con) if x.get("lat") is not None]
+            finally:
+                con.close()
+            _stations["t"] = time.time()
+        ref, st = _flights_ref, _stations["v"]
+    return flights.build_flights(db_path, ref, hours=hours, stations=st)
+
+
 class Handler(BaseHTTPRequestHandler):
     db_path = DB_PATH
     live_port = LIVE_PORT
@@ -139,6 +178,10 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 limit = 200
             self._json(messages_view.build_messages, self.db_path, tail, limit)
+        elif u.path == "/flights":
+            self._send(200, self._page(flights_view.FLIGHTS_PAGE), "text/html; charset=utf-8")
+        elif u.path == "/api/flights":
+            self._json(flights_api, self.db_path, q.get("hours", ["6"])[0])
         elif u.path == "/map.json":
             try:
                 with open(OUTLINES, "rb") as f:

@@ -40,7 +40,7 @@ import sqlite3
 import sys
 import time
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2   # 2: messages.icao
 
 # A handoff's previous station must have been heard within this many seconds.
 HANDOFF_WINDOW = 1800
@@ -79,7 +79,8 @@ def init_db(con):
             t        INTEGER,          -- epoch SECONDS (see module docstring)
             reg      TEXT, flt TEXT, dir TEXT, lbl TEXT,
             freq     INTEGER, txt TEXT,
-            has_cpdlc INTEGER, has_adsc INTEGER
+            has_cpdlc INTEGER, has_adsc INTEGER,
+            icao     TEXT              -- the aircraft's address (schema 2)
         );
         CREATE INDEX IF NOT EXISTS ix_messages_reg ON messages(reg);
         CREATE INDEX IF NOT EXISTS ix_messages_t   ON messages(t);
@@ -163,6 +164,14 @@ def init_db(con):
         );
         """
     )
+    # Schema 2: the aircraft address on each message, to join messages
+    # (registration, flight, text) to positions and XIDs, which have only the
+    # address. Older databases get the column here and their rows filled in
+    # from the archive (backfill_icao).
+    cols = {r[1] for r in con.execute("PRAGMA table_info(messages)")}
+    if "icao" not in cols:
+        con.execute("ALTER TABLE messages ADD COLUMN icao TEXT")
+    con.execute("CREATE INDEX IF NOT EXISTS ix_messages_icao ON messages(icao)")
     con.execute(
         "INSERT INTO meta(key,value) VALUES('schema',?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -474,9 +483,16 @@ class Agg:
             reg = (ev.get("reg") or "").lstrip(".")
             flt = ev.get("flt") or ""
             txt = ev.get("txt") or ""
+            # Positions: the station is the other end of the frame, and UL
+            # is aircraft to ground (iridium-sniffer's convention).
+            vpair = None
+            if ev.get("src") and ev.get("dst"):
+                vpair = ((ev["src"], ev["dst"]) if dirname == "UL"
+                         else (ev["dst"], ev["src"]))
             self.messages.append((ts, reg, flt, dirname,
                                   ev.get("lbl") or "", ev.get("freq") or 0,
-                                  txt, int(is_cpdlc), int(is_adsc)))
+                                  txt, int(is_cpdlc), int(is_adsc),
+                                  vpair[0] if vpair else None))
             if is_cpdlc:
                 node = find_node(dec, "cpdlc")
                 self.cpdlcs.append(
@@ -484,12 +500,6 @@ class Agg:
                      cpdlc_summary(node) if node is not None else "",
                      json.dumps(node, separators=(",", ":"))
                      if node is not None else ""))
-            # Positions: the station is the other end of the frame, and UL
-            # is aircraft to ground (iridium-sniffer's convention).
-            vpair = None
-            if ev.get("src") and ev.get("dst"):
-                vpair = ((ev["src"], ev["dst"]) if dirname == "UL"
-                         else (ev["dst"], ev["src"]))
             if is_adsc:
                 node = find_node(dec, "adsc")
                 pos = adsc_position(node) if node is not None else None
@@ -545,7 +555,7 @@ class Agg:
             [(k, v[0], v[1]) for k, v in self.last_gs.items()])
         con.executemany(
             "INSERT INTO messages(t,reg,flt,dir,lbl,freq,txt,has_cpdlc,"
-            "has_adsc) VALUES(?,?,?,?,?,?,?,?,?)", self.messages)
+            "has_adsc,icao) VALUES(?,?,?,?,?,?,?,?,?,?)", self.messages)
         con.executemany(
             "INSERT INTO cpdlc_log(t,reg,flt,dir,txt,summary,dec) "
             "VALUES(?,?,?,?,?,?,?)", self.cpdlcs)
@@ -553,6 +563,43 @@ class Agg:
             "INSERT INTO adsc_log(t,reg,flt,dir,txt,kinds,summary,has_pos,"
             "lat,lon,alt,dec) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             self.adscs)
+
+
+def backfill_icao(con, files, verbose):
+    """Once, for a database from before schema 2: the aircraft address on
+    the message rows already ingested, matched by time, registration and
+    label from the archive's acars events. Rows ingested from now on carry
+    it already."""
+    done = con.execute("SELECT value FROM meta WHERE key='messages_icao'").fetchone()
+    if done:
+        return
+    if con.execute("SELECT 1 FROM messages WHERE icao IS NULL LIMIT 1").fetchone():
+        n = 0
+        for path in files:
+            rows = []
+            with open(path, "rb") as f:
+                for raw in f:
+                    if b'"acars"' not in raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if ev.get("e") != "acars" or not ev.get("src") or not ev.get("dst"):
+                        continue
+                    icao = ev["src"] if ev.get("dir", "DL") == "UL" else ev["dst"]
+                    rows.append((icao, sec_of(ev["t"]), (ev.get("reg") or "").lstrip("."),
+                                 ev.get("lbl") or ""))
+            cur = con.executemany(
+                "UPDATE messages SET icao=? WHERE icao IS NULL AND t=? AND reg=? AND lbl=?",
+                rows)
+            n += cur.rowcount
+            if verbose:
+                print(f"  {os.path.basename(path)}: aircraft address on {cur.rowcount} messages")
+        print(f"rollup: aircraft address added to {n} earlier messages")
+    con.execute("INSERT INTO meta(key,value) VALUES('messages_icao','done') "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    con.commit()
 
 
 def ingest_file(con, path, agg, verbose):
@@ -615,6 +662,7 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(args.db)), exist_ok=True)
     con = sqlite3.connect(args.db)
     init_db(con)
+    backfill_icao(con, files, args.verbose)
 
     agg = Agg()
     agg.load_state(con)

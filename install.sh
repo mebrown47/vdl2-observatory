@@ -566,6 +566,9 @@ cp "$BIN" "$STAGE/bin/"
 cp "$REPO_ROOT/data/waypoints.csv" "$STAGE/share/vdl2-sniffer/"
 cp "$REPO_ROOT/data/outlines.json" "$STAGE/data/"
 cp "$REPO_ROOT"/observatory/*.py "$STAGE/observatory/"
+# the Flights page's reference data: airports and navaids
+mkdir -p "$STAGE/observatory/data"
+cp "$REPO_ROOT"/observatory/data/*.csv "$STAGE/observatory/data/"
 git -C "$REPO_ROOT" describe --always --dirty --tags > "$STAGE/VERSION" 2>/dev/null || echo unknown > "$STAGE/VERSION"
 # Swap the whole tree in by rename, so the services never see half a copy.
 as_root rm -rf "$PREFIX.new" "$PREFIX.old"
