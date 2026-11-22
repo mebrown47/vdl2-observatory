@@ -199,6 +199,23 @@ python3 observatory/server.py --db observatory/observatory.db      # http://HOST
     read by the same rules as iridium-observatory's Flights page (`observatory/context.py`).
   - Airports and navaids come from `observatory/data/`: OurAirports and FAA data, both public
     domain, built by `observatory/tools/build_reference_data.py`.
+- **Coverage** (`/coverage`): where the receiver hears aircraft and how strongly, over the last
+  day, week or month, from the positions aircraft report and the SNR of the frames that carried
+  them.
+  - A map of 0.1° cells coloured by median SNR, with range rings and the farthest the receiver
+    hears in each 5° direction (95th percentile).
+  - A sky plot, azimuth against elevation, like iridium-observatory's: VDL2 aircraft sit a few
+    degrees above the horizon, where an antenna's pattern and what stands around it show. The
+    elevation comes from the aircraft's altitude (its XIDs, or a position report's flight level)
+    over a 4/3 earth.
+  - SNR against distance.
+  - It needs the receiver's location: `STATION="LAT,LON"` or `"LAT,LON,ANTENNA_M"` (antenna height
+    above sea level, metres) in `/etc/vdl2-observatory.conf`, which the installer asks for. Without
+    it, iridium-observatory's location (its ring-alert fix) is used if that runs on the same
+    machine, and otherwise the page shows the map of cells alone. The page shows the location
+    rounded to 0.1°.
+  - Only decoded frames carry a position, so it shows where aircraft are heard, not where they're
+    missed. Positions farther than a VHF receiver can hear (600 km) are set aside and counted.
 
 `rollup.py` reads only what was appended since its last run, so run it every few minutes from a
 timer or cron. The server reads the database only and never talks to vdl2-sniffer. Port 8891 is

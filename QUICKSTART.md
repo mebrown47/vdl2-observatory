@@ -92,6 +92,7 @@ Partway through, the installer asks a few questions. Each one shows a suggested 
 | **Feed frames over UDP** | Share the messages you receive with other sites or programs, such as a local acarshub or an aggregator. Give each one as `HOST:PORT`, with spaces between | Press Enter (none), or the addresses the site gave you |
 | **Station ID for your feeds** | A name for your station on those sites, such as `XYZ-VDL2` (only asked if you feed) | Your choice, or Enter for none |
 | **Aircraft positions as SBS/BaseStation** | Send aircraft positions to a map program such as tar1090 or Virtual Radar Server | Press Enter (none) |
+| **Receiver location for the Coverage page** | Where your antenna is, as `LAT,LON` (for example `40.123,-100.456`), optionally with its height above sea level in metres. It draws range rings and the sky plot, and stays on your computer | Press Enter (none). If iridium-observatory runs on the same computer, its location is used |
 
 You can change any answer later (see "Change your answers" below).
 

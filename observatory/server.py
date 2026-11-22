@@ -34,9 +34,12 @@ import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+from urllib.request import urlopen
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import context  # noqa: E402
+import coverage  # noqa: E402
+import coverage_view  # noqa: E402
 import flights  # noqa: E402
 import flights_view  # noqa: E402
 import messages_view  # noqa: E402
@@ -130,6 +133,54 @@ def flights_api(db_path, hours):
     return flights.build_flights(db_path, ref, hours=hours, stations=st)
 
 
+# The receiver's location, for the Coverage page: the settings' STATION
+# (--station LAT,LON[,ANTENNA_M]) first, else iridium-observatory's fix on this
+# machine (its /api/sky station, from ring alerts), asked every 10 minutes.
+STATION = None
+IRIDIUM_PORT = 8890
+_iridium = {"t": 0, "v": None}
+
+
+def parse_station(text):
+    """{"lat", "lon", "alt_m", "source"} from "LAT,LON[,ANTENNA_M]", or None."""
+    try:
+        p = [float(x) for x in (text or "").replace(" ", "").split(",") if x != ""]
+    except ValueError:
+        return None
+    if len(p) not in (2, 3) or not (-90 <= p[0] <= 90 and -180 <= p[1] <= 180):
+        return None
+    return {"lat": p[0], "lon": p[1], "alt_m": p[2] if len(p) == 3 else 0.0, "source": "from the settings"}
+
+
+def station():
+    if STATION:
+        return STATION
+    if not IRIDIUM_PORT:
+        return None
+    if time.time() - _iridium["t"] > 600:
+        _iridium["t"] = time.time()
+        try:
+            with urlopen(f"http://127.0.0.1:{IRIDIUM_PORT}/api/sky", timeout=3) as r:
+                st = json.load(r).get("station") or {}
+            _iridium["v"] = ({"lat": float(st["lat"]), "lon": float(st["lon"]), "alt_m": 0.0,
+                              "source": "from iridium-observatory on this machine ("
+                                        + str(st.get("source") or "its fix") + ")"}
+                             if st.get("lat") is not None else None)
+        except (OSError, ValueError, KeyError, TypeError):
+            _iridium["v"] = None
+    return _iridium["v"]
+
+
+def coverage_api(db_path, hours):
+    try:
+        hours = max(1, min(24 * 90, int(hours)))
+    except (TypeError, ValueError):
+        hours = 168
+    if not os.path.exists(db_path):
+        return {"error": "no database yet — run rollup.py first"}
+    return coverage.build_coverage(db_path, station(), hours=hours)
+
+
 class Handler(BaseHTTPRequestHandler):
     db_path = DB_PATH
     live_port = LIVE_PORT
@@ -182,6 +233,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, self._page(flights_view.FLIGHTS_PAGE), "text/html; charset=utf-8")
         elif u.path == "/api/flights":
             self._json(flights_api, self.db_path, q.get("hours", ["6"])[0])
+        elif u.path == "/coverage":
+            self._send(200, self._page(coverage_view.COVERAGE_PAGE), "text/html; charset=utf-8")
+        elif u.path == "/api/coverage":
+            self._json(coverage_api, self.db_path, q.get("hours", ["168"])[0])
         elif u.path == "/map.json":
             try:
                 with open(OUTLINES, "rb") as f:
@@ -200,13 +255,25 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    global STATION, IRIDIUM_PORT
     ap = argparse.ArgumentParser(description="VDL2 Observatory server")
     ap.add_argument("--db", default=DB_PATH)
     ap.add_argument("--port", type=int, default=PORT)
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--live-port", type=int, default=LIVE_PORT,
                     help="vdl2-sniffer's live page on this host, for the link to it (0 = no link)")
+    ap.add_argument("--station", default="",
+                    help="the receiver's location for the Coverage page: LAT,LON[,ANTENNA_M] "
+                         "(antenna height above sea level, metres); empty = ask iridium-observatory")
+    ap.add_argument("--iridium-port", type=int, default=IRIDIUM_PORT,
+                    help="iridium-observatory on this host, for its location when --station is "
+                         "empty (0 = don't ask)")
     args = ap.parse_args()
+    STATION = parse_station(args.station)
+    if args.station and not STATION:
+        print(f"vdl2 observatory: ignoring --station {args.station!r}: expected LAT,LON[,ANTENNA_M]",
+              file=sys.stderr)
+    IRIDIUM_PORT = args.iridium_port
 
     Handler.db_path = args.db
     Handler.live_port = args.live_port

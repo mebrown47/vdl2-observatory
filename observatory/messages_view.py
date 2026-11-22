@@ -192,7 +192,7 @@ MESSAGES_PAGE = r"""<!doctype html>
 <body>
 <header>
   <h1>VDL2 Observatory</h1>
-  <nav class="nav"><a href="/">Overview</a><a href="/messages" class="on">Messages</a><a href="/flights">Flights</a><a id="livelink" href="#" hidden>Live</a></nav>
+  <nav class="nav"><a href="/">Overview</a><a href="/messages" class="on">Messages</a><a href="/flights">Flights</a><a href="/coverage">Coverage</a><a id="livelink" href="#" hidden>Live</a></nav>
   <span class="sub">decoded aircraft traffic — per-tail history &amp; CPDLC log</span>
   <span class="spacer"></span>
   <span class="status" id="status"><span class="dot"></span>loading…</span>

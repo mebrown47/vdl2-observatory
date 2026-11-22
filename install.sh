@@ -473,7 +473,7 @@ if [ -f "$CONF" ] && [ "$MODE" != reconfigure ]; then
   . "$CONF"
 else
   info "Config"
-  WEB_PORT=8889; OBS_PORT=8891; VDL2_ARGS=""
+  WEB_PORT=8889; OBS_PORT=8891; VDL2_ARGS=""; STATION=""
   # shellcheck disable=SC1090
   [ -f "$CONF" ] && . "$CONF"
   if [ "$HAND" -eq 1 ] && [ -n "$HAND_ARGS" ]; then
@@ -540,6 +540,19 @@ else
     fi
   fi
   VDL2_ARGS="$(echo "$VDL2_ARGS" | sed 's/^ *//; s/  */ /g; s/ *$//')"
+  # The receiver's location, for the Coverage page's bearings, ranges and sky
+  # plot. Optional: without it, iridium-observatory's is used if it runs here.
+  st="$(ask "Receiver location for the Coverage page: LAT,LON or LAT,LON,ANTENNA_M (antenna height above sea level; none to skip)" "${STATION:-none}")"
+  STATION=""
+  if [ -n "$st" ] && [ "$st" != none ]; then
+    st="${st// /}"
+    if [[ "$st" =~ ^(-?[0-9]+(\.[0-9]+)?),(-?[0-9]+(\.[0-9]+)?)(,-?[0-9]+(\.[0-9]+)?)?$ ]] \
+       && awk -v a="${BASH_REMATCH[1]}" -v b="${BASH_REMATCH[3]}" 'BEGIN{exit !(a>=-90&&a<=90&&b>=-180&&b<=180)}'; then
+      STATION="$st"
+    else
+      warn "'$st' is not LAT,LON[,ANTENNA_M] — no location set"
+    fi
+  fi
   root_write "$CONF" 0644 <<EOF
 # vdl2-observatory settings — written by install.sh, yours to edit.
 # After changing anything:   sudo systemctl restart vdl2-sniffer
@@ -557,6 +570,13 @@ VDL2_ARGS="$VDL2_ARGS"
 # Live page port, and Observatory dashboard port.
 WEB_PORT="$WEB_PORT"
 OBS_PORT="$OBS_PORT"
+
+# The receiver's location for the Observatory's Coverage page: LAT,LON or
+# LAT,LON,ANTENNA_M (antenna height above sea level, in metres). It stays on
+# this machine; the page shows it to 0.1 degree. Empty: iridium-observatory's
+# location is used if it runs here. After changing it:
+#   sudo systemctl restart vdl2-observatory
+STATION="$STATION"
 EOF
   ok "wrote $CONF"
 fi
@@ -660,7 +680,7 @@ After=network.target
 Type=simple
 User=$RUN_USER
 EnvironmentFile=$CONF
-ExecStart=$PY $PREFIX/observatory/server.py --db $DB_PATH --port \${OBS_PORT} --live-port \${WEB_PORT} --host 0.0.0.0
+ExecStart=$PY $PREFIX/observatory/server.py --db $DB_PATH --port \${OBS_PORT} --live-port \${WEB_PORT} --station=\${STATION} --host 0.0.0.0
 Restart=always
 RestartSec=10
 

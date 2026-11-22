@@ -36,11 +36,12 @@ import argparse
 import glob
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
 
-SCHEMA_VERSION = 2   # 2: messages.icao
+SCHEMA_VERSION = 3   # 2: messages.icao  3: vdl2_pos.snr, flight level on text positions
 
 # A handoff's previous station must have been heard within this many seconds.
 HANDOFF_WINDOW = 1800
@@ -155,7 +156,8 @@ def init_db(con):
         -- was talking to at the time.
         CREATE TABLE IF NOT EXISTS vdl2_pos (
             t INTEGER, icao TEXT, gs TEXT,
-            lat REAL, lon REAL, alt INTEGER, src TEXT
+            lat REAL, lon REAL, alt INTEGER, src TEXT,
+            snr REAL                    -- the frame that carried it (schema 3)
         );
         CREATE INDEX IF NOT EXISTS ix_vdl2_pos_t ON vdl2_pos(t);
         -- Each aircraft's latest ground station, carried between runs.
@@ -172,6 +174,11 @@ def init_db(con):
     if "icao" not in cols:
         con.execute("ALTER TABLE messages ADD COLUMN icao TEXT")
     con.execute("CREATE INDEX IF NOT EXISTS ix_messages_icao ON messages(icao)")
+    # Schema 3: the SNR of the frame each position came in, for the coverage
+    # page (backfill_pos fills older rows, and their flight levels).
+    cols = {r[1] for r in con.execute("PRAGMA table_info(vdl2_pos)")}
+    if "snr" not in cols:
+        con.execute("ALTER TABLE vdl2_pos ADD COLUMN snr REAL")
     con.execute(
         "INSERT INTO meta(key,value) VALUES('schema',?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -380,6 +387,19 @@ def adsc_summary(adsc_node, limit=12):
     return " · ".join(parts[:limit])
 
 
+# The flight level in an ARINC 620 position report: POS, the position, the
+# reporting point, its time (HHMMSS), then the flight level.
+POS_FL = re.compile(r"^\s*POS\s*[NS]\d{5}\s*[EW]\d{6},[^,]*,\d{6},(\d{3})\b")
+
+
+def pos_report_alt(txt):
+    """Altitude in feet from a position report's flight level, or None."""
+    m = POS_FL.match(txt or "")
+    if m and 10 <= int(m[1]) <= 600:
+        return int(m[1]) * 100
+    return None
+
+
 def aircraft_station(ev):
     """(aircraft, ground station) for a VDL2 event between the two, else
     None. Address kinds: 1 aircraft, 4/5 ground station."""
@@ -406,8 +426,12 @@ class Agg:
         self.messages = []  # per-message rows
         self.cpdlcs = []    # per-CPDLC rows
         self.adscs = []     # per-ADS-C rows
+        self.frame_snr = {}  # (t ms, aircraft) -> SNR of its frame, for positions
         self.lines = 0
         self.bad = 0
+
+    def snr_of(self, t_ms, icao):
+        return self.frame_snr.get((t_ms, icao))
 
     def load_state(self, con):
         self.last_gs = {r[0]: (r[1], r[2]) for r in
@@ -443,10 +467,18 @@ class Agg:
             pair = aircraft_station(ev)
             if pair and ev.get("ctl") != "XID":
                 self.last_gs[pair[0]] = (pair[1], sec_of(ev["t"]))
+            # A position event that follows carries the same time; keep the
+            # SNR for it, and only the last minute's.
+            if ev.get("sk") == 1:
+                self.frame_snr[(ev["t"], ev.get("src"))] = snr
+                if len(self.frame_snr) > 20000:
+                    cut = ev["t"] - 60000
+                    self.frame_snr = {k: v for k, v in self.frame_snr.items() if k[0] >= cut}
         elif e == "vpos":
             # a VDL2 position from ACARS text ('text' or 'fix')
-            self.v_pos.append((sec_of(ev["t"]), ev["icao"], ev["gs"], ev["lat"],
-                               ev["lon"], None, ev.get("src", "text")))
+            self.v_pos.append([sec_of(ev["t"]), ev["icao"], ev["gs"], ev["lat"],
+                               ev["lon"], None, ev.get("src", "text"),
+                               self.snr_of(ev["t"], ev["icao"])])
         elif e == "xid":
             pair = aircraft_station(ev)
             if pair:
@@ -458,8 +490,8 @@ class Agg:
                            and 0 <= ts - prev[1] <= HANDOFF_WINDOW else None)
                 loc = x.get("ac_location") or {}
                 if loc.get("lat") is not None:
-                    self.v_pos.append((ts, icao, gs, loc["lat"], loc["lon"],
-                                       loc.get("alt_ft"), "xid"))
+                    self.v_pos.append([ts, icao, gs, loc["lat"], loc["lon"],
+                                       loc.get("alt_ft"), "xid", self.snr_of(ev["t"], icao)])
                 self.v_xid.append((ts, icao, gs, from_gs, x.get("type", ""),
                                    x.get("dst_airport", ""), loc.get("lat"),
                                    loc.get("lon"), loc.get("alt_ft"),
@@ -500,12 +532,20 @@ class Agg:
                      cpdlc_summary(node) if node is not None else "",
                      json.dumps(node, separators=(",", ":"))
                      if node is not None else ""))
+            # A position report's flight level, onto the position it gave
+            # (its vpos event came just before, at the same time).
+            alt = pos_report_alt(txt) if vpair and dirname == "UL" else None
+            if alt:
+                for row in reversed(self.v_pos[-32:]):
+                    if row[0] == ts and row[1] == vpair[0] and row[6] == "text" and row[5] is None:
+                        row[5] = alt
+                        break
             if is_adsc:
                 node = find_node(dec, "adsc")
                 pos = adsc_position(node) if node is not None else None
                 if vpair and pos:
-                    self.v_pos.append((ts, vpair[0], vpair[1], pos[0], pos[1],
-                                       pos[2], "adsc"))
+                    self.v_pos.append([ts, vpair[0], vpair[1], pos[0], pos[1],
+                                       pos[2], "adsc", self.snr_of(ev["t"], vpair[0])])
                 kinds = ",".join(n for n, _ in adsc_tags(node)) \
                     if node is not None else ""
                 self.adscs.append(
@@ -546,8 +586,8 @@ class Agg:
             "INSERT INTO vdl2_xid(t,icao,gs,from_gs,kind,airport,lat,lon,alt,"
             "alt_gs) VALUES(?,?,?,?,?,?,?,?,?,?)", self.v_xid)
         con.executemany(
-            "INSERT INTO vdl2_pos(t,icao,gs,lat,lon,alt,src) "
-            "VALUES(?,?,?,?,?,?,?)", self.v_pos)
+            "INSERT INTO vdl2_pos(t,icao,gs,lat,lon,alt,src,snr) "
+            "VALUES(?,?,?,?,?,?,?,?)", self.v_pos)
         con.executemany(
             "INSERT INTO vdl2_last_gs(icao,gs,t) VALUES(?,?,?) "
             "ON CONFLICT(icao) DO UPDATE SET gs=excluded.gs, t=excluded.t "
@@ -598,6 +638,54 @@ def backfill_icao(con, files, verbose):
                 print(f"  {os.path.basename(path)}: aircraft address on {cur.rowcount} messages")
         print(f"rollup: aircraft address added to {n} earlier messages")
     con.execute("INSERT INTO meta(key,value) VALUES('messages_icao','done') "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    con.commit()
+
+
+def backfill_pos(con, files, verbose):
+    """Once, for a database from before schema 3: the SNR of the frame each
+    stored position came in (from the archive's vframe events at the same
+    millisecond), and the flight level of positions from position reports
+    (from the messages table)."""
+    if con.execute("SELECT value FROM meta WHERE key='pos_snr'").fetchone():
+        return
+    if con.execute("SELECT 1 FROM vdl2_pos WHERE snr IS NULL LIMIT 1").fetchone():
+        n = 0
+        for path in files:
+            frames, rows = {}, []
+            with open(path, "rb") as f:
+                for raw in f:
+                    if b'"vframe"' in raw[:20] and b'"sk": 1' not in raw and b'"sk":1' not in raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except ValueError:
+                        continue
+                    e = ev.get("e")
+                    if e == "vframe" and ev.get("sk") == 1:
+                        frames[(ev["t"], ev.get("src"))] = ev.get("snr")
+                    elif e in ("vpos", "xid", "acars"):
+                        icao = (ev.get("icao") if e == "vpos" else
+                                (ev.get("src") if ev.get("sk") == 1 or ev.get("dir") == "UL" else ev.get("dst")))
+                        s = frames.get((ev["t"], icao))
+                        if s is not None:
+                            rows.append((s, icao, sec_of(ev["t"])))
+            cur = con.executemany(
+                "UPDATE vdl2_pos SET snr=? WHERE snr IS NULL AND icao=? AND t=?", rows)
+            n += cur.rowcount
+            if verbose:
+                print(f"  {os.path.basename(path)}: SNR on {cur.rowcount} positions")
+        fl = 0
+        for t, icao, txt in con.execute(
+                "SELECT m.t, m.icao, m.txt FROM messages m JOIN vdl2_pos p "
+                "ON p.icao = m.icao AND p.t = m.t AND p.src = 'text' AND p.alt IS NULL "
+                "WHERE m.txt LIKE 'POS%'").fetchall():
+            alt = pos_report_alt(txt)
+            if alt:
+                fl += con.execute("UPDATE vdl2_pos SET alt=? WHERE icao=? AND t=? AND src='text' "
+                                  "AND alt IS NULL", (alt, icao, t)).rowcount
+        print(f"rollup: SNR added to {n} earlier positions, flight level to {fl}")
+    con.execute("INSERT INTO meta(key,value) VALUES('pos_snr','done') "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
     con.commit()
 
@@ -665,6 +753,7 @@ def main():
     con = sqlite3.connect(args.db)
     init_db(con)
     backfill_icao(con, files, args.verbose)
+    backfill_pos(con, files, args.verbose)
 
     agg = Agg()
     agg.load_state(con)

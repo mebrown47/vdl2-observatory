@@ -291,7 +291,7 @@ VDL2_PAGE = r"""<!doctype html>
 <body>
 <header>
   <h1>VDL2 Observatory</h1>
-  <nav class="nav"><a href="/" class="on">Overview</a><a href="/messages">Messages</a><a href="/flights">Flights</a><a id="livelink" href="#" hidden>Live</a></nav>
+  <nav class="nav"><a href="/" class="on">Overview</a><a href="/messages">Messages</a><a href="/flights">Flights</a><a href="/coverage">Coverage</a><a id="livelink" href="#" hidden>Live</a></nav>
   <span class="sub">VHF data link, 136.650–136.975 MHz</span>
   <span class="spacer"></span>
   <div class="controls" id="win">
