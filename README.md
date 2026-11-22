@@ -227,6 +227,17 @@ python3 observatory/server.py --db observatory/observatory.db      # http://HOST
     rounded to 0.1°.
   - Only decoded frames carry a position, so it shows where aircraft are heard, not where they're
     missed. Positions farther than a VHF receiver can hear (600 km) are set aside and counted.
+- **Graph** (`/graph`): the ground-station network as aircraft move through it, the counterpart
+  of iridium-observatory's Graph tab.
+  - A map of every pair of stations an aircraft was handed between in the last day, week or
+    month: each XID names the station the aircraft leaves and the one it joins. Lines are
+    thicker for more handoffs, with an arrow for the direction. Stations sit at their estimated
+    positions (the Overview's), so distant ones lean towards the receiver. Click a station to see
+    who it hands aircraft to and takes them from.
+  - Tables of the busiest pairs and stations.
+  - One aircraft, by registration, flight or address: messages per day, the stations it used,
+    its recent handoffs, and the routes its own messages gave, by day. It links to the aircraft's
+    messages in Search and, if heard in the last day, to its track on Flights.
 
 `rollup.py` reads only what was appended since its last run, so run it every few minutes from a
 timer or cron. The server reads the database only and never talks to vdl2-sniffer. Port 8891 is

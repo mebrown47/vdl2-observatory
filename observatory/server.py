@@ -42,6 +42,8 @@ import coverage  # noqa: E402
 import coverage_view  # noqa: E402
 import flights  # noqa: E402
 import flights_view  # noqa: E402
+import graph  # noqa: E402
+import graph_view  # noqa: E402
 import messages_view  # noqa: E402
 import search  # noqa: E402
 import search_view  # noqa: E402
@@ -107,16 +109,11 @@ _flights_ref = None
 _stations = {"t": 0, "v": []}
 
 
-def flights_api(db_path, hours):
-    """/api/flights: the reference data (airports, fixes) is read on first
-    use; the station estimates (all time, every position) every 5 minutes."""
+def _shared(db_path, placed_only=True):
+    """The reference data (airports, fixes), read on first use, and the
+    station estimates (all time, every position), every 5 minutes; for the
+    Flights and Graph pages."""
     global _flights_ref
-    try:
-        hours = max(1, min(48, int(hours)))
-    except (TypeError, ValueError):
-        hours = 6
-    if not os.path.exists(db_path):
-        return {"error": "no database yet — run rollup.py first"}
     with _flights_lock:
         if _flights_ref is None:
             here = os.path.dirname(os.path.abspath(__file__))
@@ -127,12 +124,39 @@ def flights_api(db_path, hours):
         if time.time() - _stations["t"] > 300:
             con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
             try:
-                _stations["v"] = [x for x in vdl2_view.estimate_stations(con) if x.get("lat") is not None]
+                _stations["v"] = vdl2_view.estimate_stations(con)
             finally:
                 con.close()
             _stations["t"] = time.time()
         ref, st = _flights_ref, _stations["v"]
+    return ref, ([x for x in st if x.get("lat") is not None] if placed_only else st)
+
+
+def flights_api(db_path, hours):
+    try:
+        hours = max(1, min(48, int(hours)))
+    except (TypeError, ValueError):
+        hours = 6
+    if not os.path.exists(db_path):
+        return {"error": "no database yet — run rollup.py first"}
+    ref, st = _shared(db_path)
     return flights.build_flights(db_path, ref, hours=hours, stations=st)
+
+
+def graph_api(db_path, q):
+    """/api/graph (the network), ?aircraft=Q (one aircraft), ?list=1 (suggestions)."""
+    if not os.path.exists(db_path):
+        return {"error": "no database yet — run rollup.py first"}
+    ref, st = _shared(db_path, placed_only=False)
+    if q.get("aircraft"):
+        return graph.build_aircraft(db_path, ref, q["aircraft"][0])
+    if q.get("list"):
+        return {"aircraft": graph.aircraft_list(db_path)}
+    try:
+        hours = max(1, min(24 * 90, int(q.get("hours", ["168"])[0])))
+    except ValueError:
+        hours = 168
+    return graph.build_network(db_path, st, hours=hours)
 
 
 # The receiver's location, for the Coverage page: the settings' STATION
@@ -254,6 +278,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 if self.command != "HEAD":
                     self.wfile.write(b)
+        elif u.path == "/graph":
+            self._send(200, self._page(graph_view.GRAPH_PAGE), "text/html; charset=utf-8")
+        elif u.path == "/api/graph":
+            self._json(graph_api, self.db_path, q)
         elif u.path == "/coverage":
             self._send(200, self._page(coverage_view.COVERAGE_PAGE), "text/html; charset=utf-8")
         elif u.path == "/api/coverage":

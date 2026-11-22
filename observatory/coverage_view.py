@@ -73,7 +73,7 @@ COVERAGE_PAGE = r"""<!doctype html>
 <body>
 <header>
   <h1>VDL2 Observatory</h1>
-  <nav class="nav"><a href="/">Overview</a><a href="/messages">Messages</a><a href="/search">Search</a><a href="/flights">Flights</a><a href="/coverage" class="on">Coverage</a><a id="livelink" href="#" hidden>Live</a></nav>
+  <nav class="nav"><a href="/">Overview</a><a href="/messages">Messages</a><a href="/search">Search</a><a href="/flights">Flights</a><a href="/coverage" class="on">Coverage</a><a href="/graph">Graph</a><a id="livelink" href="#" hidden>Live</a></nav>
   <span class="sub">where this receiver hears aircraft, and how strongly</span>
   <span class="spacer"></span>
   <div class="controls" id="win">

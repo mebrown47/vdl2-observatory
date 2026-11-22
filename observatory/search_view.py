@@ -115,7 +115,7 @@ SEARCH_PAGE = r"""<!doctype html>
 <body>
 <header>
   <h1>VDL2 Observatory</h1>
-  <nav class="nav"><a href="/">Overview</a><a href="/messages">Messages</a><a href="/search" class="on">Search</a><a href="/flights">Flights</a><a href="/coverage">Coverage</a><a id="livelink" href="#" hidden>Live</a></nav>
+  <nav class="nav"><a href="/">Overview</a><a href="/messages">Messages</a><a href="/search" class="on">Search</a><a href="/flights">Flights</a><a href="/coverage">Coverage</a><a href="/graph">Graph</a><a id="livelink" href="#" hidden>Live</a></nav>
   <span class="sub">every stored ACARS message, by aircraft, text, label, channel and date</span>
   <span class="spacer"></span>
   <span class="status" id="status">loading…</span>
