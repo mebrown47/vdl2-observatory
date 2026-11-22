@@ -47,9 +47,11 @@ proxy with a login (nginx or Caddy with basic auth, say) or allow only the addre
 the firewall (`ufw allow from 203.0.113.7 to any port 8891`). The servers are simple, made for a
 handful of viewers; heavy traffic from the internet can slow them down.
 
-Settings live in `/etc/vdl2-observatory.conf` (`sudo systemctl restart vdl2-sniffer` after an
-edit); program files in `/opt/vdl2-observatory`; the archive and database in
-`/var/lib/vdl2-observatory`. Later:
+Settings live in `/etc/vdl2-observatory.conf`. After an edit, restart the service that reads the
+setting: `sudo systemctl restart vdl2-sniffer` for the receiver's `VDL2_ARGS`, or
+`sudo systemctl restart vdl2-observatory` for the dashboard's `STATION`. Their logs are
+`journalctl -u vdl2-sniffer -f` and `journalctl -u vdl2-observatory -f`. Program files live in
+`/opt/vdl2-observatory`, the archive and database in `/var/lib/vdl2-observatory`. Later:
 
 ```bash
 ./install.sh --update        # git pull, rebuild, test, reinstall, restart

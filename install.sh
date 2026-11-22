@@ -555,9 +555,16 @@ else
   fi
   root_write "$CONF" 0644 <<EOF
 # vdl2-observatory settings — written by install.sh, yours to edit.
-# After changing anything:   sudo systemctl restart vdl2-sniffer
+#
+# Two services read this file; after a change, restart the one that uses it:
+#   vdl2-sniffer       the receiver and its live page   VDL2_ARGS
+#                      sudo systemctl restart vdl2-sniffer
+#                      logs: journalctl -u vdl2-sniffer -f
+#   vdl2-observatory   the Observatory dashboard        STATION
+#                      sudo systemctl restart vdl2-observatory
+#                      logs: journalctl -u vdl2-observatory -f
 # Ports or user changed?     re-run ./install.sh so the services follow.
-# All options:               vdl2-sniffer --help
+# All receiver options:      vdl2-sniffer --help
 #
 # Archive and database always live in $DATA_DIR
 
@@ -781,8 +788,9 @@ fi
 info "Done"
 say "  Live page:    ${B}http://$IP:$WEB_PORT/${Z}"
 say "  Observatory:  ${B}http://$IP:$OBS_PORT/${Z}   (fills in as the rollup runs, every minute)"
-say "  Settings:     $CONF  then  sudo systemctl restart vdl2-sniffer"
-say "  Logs:         journalctl -u vdl2-sniffer -f"
+say "  Settings:     $CONF  (it says which service to restart after a change)"
+say "  Services:     vdl2-sniffer (the receiver), vdl2-observatory (the dashboard)"
+say "  Logs:         journalctl -u vdl2-sniffer -f   (receiver)"
 say "  Update:       ./install.sh --update"
 if have ufw && [ "$DRY_RUN" -eq 0 ] && grep -q '^Status: active' <<<"$(sudo ufw status 2>/dev/null)"; then
   warn "ufw is active — for LAN access:  sudo ufw allow $WEB_PORT/tcp && sudo ufw allow $OBS_PORT/tcp"
