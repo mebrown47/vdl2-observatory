@@ -43,6 +43,8 @@ import coverage_view  # noqa: E402
 import flights  # noqa: E402
 import flights_view  # noqa: E402
 import messages_view  # noqa: E402
+import search  # noqa: E402
+import search_view  # noqa: E402
 import vdl2_view  # noqa: E402
 
 DB_PATH = "observatory/observatory.db"
@@ -233,6 +235,25 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, self._page(flights_view.FLIGHTS_PAGE), "text/html; charset=utf-8")
         elif u.path == "/api/flights":
             self._json(flights_api, self.db_path, q.get("hours", ["6"])[0])
+        elif u.path == "/search":
+            self._send(200, self._page(search_view.SEARCH_PAGE), "text/html; charset=utf-8")
+        elif u.path == "/api/search":
+            self._json(search.build_search, self.db_path, q)
+        elif u.path == "/api/search.csv":
+            try:
+                body = search.search_csv(self.db_path, q)
+            except Exception as e:  # noqa: keep the server alive
+                self._send(500, "error\n%s\n" % e, "text/csv; charset=utf-8")
+            else:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Disposition", 'attachment; filename="vdl2-messages-%s.csv"'
+                                 % time.strftime("%Y%m%d-%H%M%S", time.gmtime()))
+                b = body.encode("utf-8")
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(b)
         elif u.path == "/coverage":
             self._send(200, self._page(coverage_view.COVERAGE_PAGE), "text/html; charset=utf-8")
         elif u.path == "/api/coverage":

@@ -45,5 +45,14 @@ while read -r line; do
     esac
 done < <(python3 "$HERE/test_coverage.py" 2>&1)
 
+echo "== Search page =="
+while read -r line; do
+    echo "  $line"
+    case "$line" in
+        PASS*) pass=$((pass + 1)) ;;
+        FAIL*) fail=$((fail + 1)) ;;
+    esac
+done < <(python3 "$HERE/test_search.py" 2>&1)
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

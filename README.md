@@ -185,6 +185,15 @@ python3 observatory/server.py --db observatory/observatory.db      # http://HOST
   - handoffs between stations, and aircraft positions
   - the busiest aircraft
 - **Messages** (`/messages`): each aircraft's messages, the CPDLC log and ADS-C.
+- **Search** (`/search`): every stored ACARS message, filtered by aircraft (registration, flight
+  or address, partial), text, label, direction, CPDLC/ADS-C, channel and a UTC date range. It
+  shows the matches per day and the top labels, aircraft and channels (click one to filter),
+  and the messages 200 to a page with the search text marked, CPDLC/ADS-C summaries joined in,
+  and a link to the aircraft's track on the Flights page for the last 24 hours. Heartbeats
+  (`_d`) are hidden unless asked for; filters live in the address, so a search can be
+  bookmarked; `/api/search.csv` downloads up to 100,000 matches. A query still running after
+  5 s is stopped, so a broad search can't slow the receiver. On a month of a feeder's messages
+  (238,000) a search takes 0.2-0.3 s. Ported from iridium-observatory's Search tab.
 - **Flights** (`/flights`): each aircraft heard in the last 2, 6 or 24 hours, with a map.
   - Its **track** is the positions it reported: XIDs (to 0.1°), ACARS position reports and
     ADS-C. Points it couldn't have flown between are left out (an intent list's points ahead, an
