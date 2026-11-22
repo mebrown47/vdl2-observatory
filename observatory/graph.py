@@ -38,12 +38,14 @@ def build_network(db_path, stations, hours=168, now=None):
         pairs = con.execute(
             "SELECT from_gs, gs, COUNT(*), COUNT(DISTINCT icao), MAX(t) FROM vdl2_xid "
             "WHERE t >= ? AND t <= ? AND from_gs IS NOT NULL AND from_gs != '' AND from_gs != gs "
+            "AND from_gs != '000000' AND gs != '000000' "   # a placeholder, not a station
             "GROUP BY from_gs, gs", (t0, now)).fetchall()
         heard = dict(con.execute(
-            "SELECT gs, COUNT(DISTINCT icao) FROM vdl2_xid WHERE t >= ? AND t <= ? GROUP BY gs",
+            "SELECT gs, COUNT(DISTINCT icao) FROM vdl2_xid WHERE t >= ? AND t <= ? AND gs != '000000' GROUP BY gs",
             (t0, now)).fetchall())
         n_ac = con.execute("SELECT COUNT(DISTINCT icao) FROM vdl2_xid WHERE t >= ? AND t <= ? "
-                           "AND from_gs IS NOT NULL AND from_gs != ''", (t0, now)).fetchone()[0]
+                           "AND from_gs IS NOT NULL AND from_gs != '' AND from_gs != gs "
+                           "AND from_gs != '000000' AND gs != '000000'", (t0, now)).fetchone()[0]
     finally:
         con.close()
     est = {s["station"]: s for s in stations}

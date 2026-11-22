@@ -45,6 +45,7 @@ xid(NOW - 2000, "A00001", "AAAAAA", "BBBBBB")
 xid(NOW - 1000, "A00001", "BBBBBB", "AAAAAA")
 xid(NOW - 500, "A00003", "", "CCCCCC")            # first contact: no from-station
 xid(NOW - 10 * 86400, "A00004", "AAAAAA", "DDDDDD")  # outside a 7-day window
+xid(NOW - 400, "A00005", "AAAAAA", "000000")         # a placeholder address, not a station
 con.executemany("INSERT INTO messages(t,reg,flt,dir,lbl,freq,txt,has_cpdlc,has_adsc,icao) VALUES(?,?,?,?,?,?,?,?,?,?)", [
     (NOW - 3500, "N1AA", "AA0001", "UL", "H1", 136975000, "TRP KATL KMCO  7 4", 0, 0, "A00001"),
     (NOW - 3400, "N1AA", "AA0001", "UL", "_d", 136975000, "", 0, 0, "A00001"),
@@ -61,6 +62,8 @@ check(p[("AAAAAA", "BBBBBB")]["handoffs"] == 3 and p[("AAAAAA", "BBBBBB")]["airc
 check(p[("BBBBBB", "AAAAAA")]["handoffs"] == 1, "each direction counted on its own")
 check(("AAAAAA", "DDDDDD") not in p, "handoffs outside the window left out")
 check(not any(x["from"] == "" for x in n["pairs"]), "first contacts are not handoffs")
+check(not any("000000" in (x["from"], x["to"]) for x in n["pairs"]) and "000000" not in {x["station"] for x in n["stations"]},
+      "the 000000 placeholder is not a station")
 s = {x["station"]: x for x in n["stations"]}
 check(s["AAAAAA"]["out"] == 3 and s["AAAAAA"]["in"] == 1, "station in/out")
 check("CCCCCC" in s and s["CCCCCC"]["lat"] is None, "a station without a position is listed, unplaced")

@@ -229,11 +229,14 @@ python3 observatory/server.py --db observatory/observatory.db      # http://HOST
     missed. Positions farther than a VHF receiver can hear (600 km) are set aside and counted.
 - **Graph** (`/graph`): the ground-station network as aircraft move through it, the counterpart
   of iridium-observatory's Graph tab.
-  - A map of every pair of stations an aircraft was handed between in the last day, week or
-    month: each XID names the station the aircraft leaves and the one it joins. Lines are
-    thicker for more handoffs, with an arrow for the direction. Stations sit at their estimated
-    positions (the Overview's), so distant ones lean towards the receiver. Click a station to see
-    who it hands aircraft to and takes them from.
+  - A map of the pairs of stations aircraft were handed between in the last day, week or month:
+    each XID names the station the aircraft leaves and the one it joins. One line per pair,
+    thicker for more handoffs; the busiest 100 by default (50, 300 or all). Stations sit at
+    their estimated positions (the Overview's), so distant ones lean towards the receiver.
+  - The map opens on the busy core (the middle 80% of stations, weighted by handoffs), so a few
+    far-off stations don't shrink the rest; scroll to zoom, drag to move, or fit every station.
+    Lines to stations outside the view run off its edge. Click a station to see its handoffs
+    each way, as arrows.
   - Tables of the busiest pairs and stations.
   - One aircraft, by registration, flight or address: messages per day, the stations it used,
     its recent handoffs, and the routes its own messages gave, by day. It links to the aircraft's

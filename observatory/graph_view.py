@@ -56,6 +56,10 @@ GRAPH_PAGE = r"""<!doctype html>
     display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
   .panel h2 .hint{color:var(--dim);font-weight:400;font-size:11.5px}
   svg{display:block;overflow:hidden}
+  #map{touch-action:none;cursor:grab;user-select:none}
+  .controls span.controls{gap:4px;align-items:center}
+  .controls .lab{color:var(--dim);font-size:11.5px;font-weight:400;margin-right:2px}
+  .panel h2 .controls{display:flex;gap:10px;flex-wrap:wrap}
   .gl{stroke:var(--grid);stroke-width:1}
   .mapax{fill:var(--dim);font-size:11px}
   .plc{fill:var(--place);font-size:10.5px}
@@ -103,7 +107,9 @@ GRAPH_PAGE = r"""<!doctype html>
 <main>
   <div class="cards" id="cards"></div>
   <div class="panel">
-    <h2>Handoff network <span class="hint">a line for each pair of stations an aircraft was handed between (its XID names the station it leaves and the one it joins), thicker for more handoffs, the arrow pointing where it went; stations at their estimated positions (see the Overview). Click a station, or a row below</span></h2>
+    <h2><span>Handoff network <span class="hint">a line for each pair of stations aircraft were handed between (an XID names the station it leaves and the one it joins), thicker for more handoffs; stations at their estimated positions (see the Overview). Scroll to zoom, drag to move, click a station for its handoffs each way</span></span>
+      <span class="controls"><span class="controls" id="lines"><span class="lab">Lines</span><button data-n="50">50</button><button data-n="100" class="on">100</button><button data-n="300">300</button><button data-n="0">all</button></span>
+      <span class="controls" id="mapctl"><span class="lab">Zoom</span><button data-a="in" title="zoom in">+</button><button data-a="out" title="zoom out">−</button><button data-a="core" title="the stations that carry most handoffs">Fit core</button><button data-a="all" title="every placed station">Fit all</button></span></span></h2>
     <div id="map"></div>
     <div id="sel" class="sel"></div>
   </div>
@@ -184,65 +190,119 @@ function select(st){SEL=SEL===st?null:st;
   history.replaceState(null,"",SEL?"#st="+SEL:location.pathname+location.search);
   drawMap();drawTables();info();}
 
+// The map view: centre (lon, lat) and scale (px per degree of latitude), on
+// an equirectangular projection squeezed by cos(latitude). It opens on the
+// busy core and keeps whatever view the viewer zooms or drags to.
+let V=null,NP=100,MERGED=[],DRAG=null;
+function placed(){return D.stations.filter(s=>s.lat!=null&&s.in+s.out>0);}
+function geom(){const host=$("map"),W=Math.max(260,host.clientWidth||900);
+  return {W,H:Math.round(Math.max(360,Math.min(620,W*.6)))};}
+function wpct(items,key,p){const a=items.slice().sort((x,y)=>key(x)-key(y)),tot=a.reduce((t,x)=>t+x.w,0);
+  let c=0;for(const x of a){c+=x.w;if(c>=p*tot)return key(x);}return key(a[a.length-1]);}
+function fitBox(la0,la1,lo0,lo1,k){const {W,H}=geom();
+  if(la1-la0<1.2){const c=(la0+la1)/2;la0=c-.6;la1=c+.6;}
+  if((lo1-lo0)*k<1.2){const c=(lo0+lo1)/2;lo0=c-.6/k;lo1=c+.6/k;}
+  return {k,cx:(lo0+lo1)/2,cy:(la0+la1)/2,sc:Math.min(W/((lo1-lo0)*k),H/(la1-la0))};}
+function fitCore(){const st=placed().map(s=>({lat:s.lat,lon:s.lon,w:s.in+s.out}));if(!st.length)return null;
+  const k=Math.cos(wpct(st,s=>s.lat,.5)*Math.PI/180);
+  let la0=wpct(st,s=>s.lat,.1),la1=wpct(st,s=>s.lat,.9),lo0=wpct(st,s=>s.lon,.1),lo1=wpct(st,s=>s.lon,.9);
+  const pl=(la1-la0)*.3+.15,po=(lo1-lo0)*.3+.15/k;
+  return fitBox(la0-pl,la1+pl,lo0-po,lo1+po,k);}
+function fitAll(){const st=placed();if(!st.length)return null;const k=V?V.k:fitCore().k;
+  let la0=Math.min(...st.map(s=>s.lat)),la1=Math.max(...st.map(s=>s.lat)),lo0=Math.min(...st.map(s=>s.lon)),lo1=Math.max(...st.map(s=>s.lon));
+  const pl=(la1-la0)*.05+.1,po=(lo1-lo0)*.05+.1/k;
+  return fitBox(la0-pl,la1+pl,lo0-po,lo1+po,k);}
+function zoom(f,mx,my){const {W,H}=geom();if(mx==null){mx=W/2;my=H/2;}
+  const lim=fitAll(),lo=lim?lim.sc*.6:1,sc=Math.max(lo,Math.min(3000,V.sc*f));
+  const lon=V.cx+(mx-W/2)/(V.k*V.sc),lat=V.cy-(my-H/2)/V.sc;
+  V.cx=lon-(mx-W/2)/(V.k*sc);V.cy=lat+(my-H/2)/sc;V.sc=sc;redraw();}
+let rq=0;function redraw(){if(!rq)rq=requestAnimationFrame(()=>{rq=0;drawMap();});}
+function mergePairs(){const m={};
+  for(const p of D.pairs){const key=p.from<p.to?p.from+"|"+p.to:p.to+"|"+p.from;
+    const e=m[key]||(m[key]={a:p.from<p.to?p.from:p.to,b:p.from<p.to?p.to:p.from,n:0,ab:0,ba:0,last:0});
+    e.n+=p.handoffs;if(p.from===e.a)e.ab+=p.handoffs;else e.ba+=p.handoffs;e.last=Math.max(e.last,p.last);}
+  MERGED=Object.values(m).sort((x,y)=>y.n-x.n);}
+(function(){const host=$("map");
+  host.addEventListener("wheel",e=>{if(!V)return;e.preventDefault();const r=host.getBoundingClientRect();
+    zoom(e.deltaY<0?1.25:.8,e.clientX-r.left,e.clientY-r.top);},{passive:false});
+  host.addEventListener("pointerdown",e=>{if(!V||e.button)return;DRAG={x:e.clientX,y:e.clientY,moved:false};});
+  host.addEventListener("pointermove",e=>{if(!DRAG)return;const dx=e.clientX-DRAG.x,dy=e.clientY-DRAG.y;
+    if(!DRAG.moved&&Math.hypot(dx,dy)<4)return;
+    if(!DRAG.moved){DRAG.moved=true;host.setPointerCapture(e.pointerId);host.style.cursor="grabbing";}
+    V.cx-=dx/(V.k*V.sc);V.cy+=dy/V.sc;DRAG.x=e.clientX;DRAG.y=e.clientY;redraw();});
+  const up=()=>{if(DRAG&&DRAG.moved)setTimeout(()=>{DRAG=null;},0);else DRAG=null;host.style.cursor="";};
+  host.addEventListener("pointerup",up);host.addEventListener("pointercancel",up);
+  host.addEventListener("click",e=>{if(DRAG&&DRAG.moved)return;const st=e.target.dataset&&e.target.dataset.st;
+    if(st)select(st);else if(SEL)select(SEL);});
+  document.querySelectorAll("#mapctl button").forEach(b=>b.addEventListener("click",()=>{if(!V)return;
+    const a=b.dataset.a;if(a==="in")zoom(1.5);else if(a==="out")zoom(1/1.5);
+    else{V=(a==="all"?fitAll():fitCore())||V;drawMap();}}));
+  document.querySelectorAll("#lines button").forEach(b=>b.addEventListener("click",()=>{
+    document.querySelectorAll("#lines button").forEach(x=>x.classList.toggle("on",x===b));NP=+b.dataset.n||1e9;drawMap();}));
+})();
+
 function drawMap(){
-  const host=$("map"),st=D.stations.filter(s=>s.lat!=null),at={};st.forEach(s=>at[s.station]=s);
-  const pairs=D.pairs.filter(p=>at[p.from]&&at[p.to]);
-  if(!st.length||!pairs.length){host.innerHTML='<div class="empty">no handoffs between placed stations in the window</div>';return;}
-  const used=new Set();pairs.forEach(p=>{used.add(p.from);used.add(p.to);});
-  const shown=st.filter(s=>used.has(s.station));
-  let la0=Math.min(...shown.map(s=>s.lat)),la1=Math.max(...shown.map(s=>s.lat));
-  let lo0=Math.min(...shown.map(s=>s.lon)),lo1=Math.max(...shown.map(s=>s.lon));
-  const k=Math.cos((la0+la1)/2*Math.PI/180),pad=Math.max(.3,(la1-la0)*.06);
-  la0-=pad;la1+=pad;lo0-=pad/k;lo1+=pad/k;
-  if(la1-la0<2){const c=(la0+la1)/2;la0=c-1;la1=c+1;}
-  if((lo1-lo0)*k<2){const c=(lo0+lo1)/2;lo0=c-1/k;lo1=c+1/k;}
-  const W=Math.max(260,host.clientWidth||900),H=Math.round(Math.max(340,Math.min(660,W*(la1-la0)/((lo1-lo0)*k))));
-  const sc=Math.min(W/((lo1-lo0)*k),H/(la1-la0));
-  const X=lo=>(lo-lo0)*k*sc+(W-(lo1-lo0)*k*sc)/2,Y=la=>(la1-la)*sc+(H-(la1-la0)*sc)/2;
+  const host=$("map"),st=placed(),at={};st.forEach(s=>at[s.station]=s);
+  if(!st.length||!MERGED.length){host.innerHTML='<div class="empty">no handoffs between placed stations in the window</div>';return;}
+  if(!V)V=fitCore();
+  const {W,H}=geom(),k=V.k,sc=V.sc;
+  const X=lo=>W/2+(lo-V.cx)*k*sc,Y=la=>H/2-(la-V.cy)*sc;
+  const lo0=V.cx-W/2/(k*sc),lo1=V.cx+W/2/(k*sc),la0=V.cy-H/2/sc,la1=V.cy+H/2/sc;
+  const inView=s=>s.lon>=lo0&&s.lon<=lo1&&s.lat>=la0&&s.lat<=la1;
   host.innerHTML="";const s=el("svg",{viewBox:"0 0 "+W+" "+H,width:W,height:H});host.appendChild(s);
-  const defs=el("defs");["a","b"].forEach(n=>{const m=el("marker",{id:"ar-"+n,viewBox:"0 0 10 10",refX:9,refY:5,markerWidth:5,markerHeight:5,orient:"auto"});
-    m.appendChild(el("path",{d:"M0 0L10 5L0 10z",fill:n==="a"?"#4aa8ff":"#e6edf3"}));defs.appendChild(m);});s.appendChild(defs);
-  const bg=el("rect",{x:0,y:0,width:W,height:H,fill:"var(--water)",stroke:"var(--line)"});
-  bg.addEventListener("click",()=>{if(SEL)select(SEL);});s.appendChild(bg);
-  const lonAt=x=>lo0+(x-X(lo0))/(k*sc),latAt=y=>la1-(y-Y(la1))/sc;
-  const view=[lonAt(0),latAt(H),lonAt(W),latAt(0)],bgG=outlines(s,X,Y,...view);
-  const maxh=Math.max(...pairs.map(p=>p.handoffs)),boxes=[];
-  // the busiest 300 pairs, quietest first so the busiest draw on top; each
-  // direction offset to its own side of the line between the two stations
-  const draw=pairs.slice(0,300).reverse();
-  draw.forEach(p=>{const a=at[p.from],b=at[p.to],x1=X(a.lon),y1=Y(a.lat),x2=X(b.lon),y2=Y(b.lat);
-    const len=Math.hypot(x2-x1,y2-y1);if(len<12)return;
-    const ux=(x2-x1)/len,uy=(y2-y1)/len,ox=-uy*2.5,oy=ux*2.5;
-    const on=SEL&&(p.from===SEL||p.to===SEL),w=.8+5*Math.sqrt(p.handoffs/maxh);
-    const ln=el("line",{x1:x1+ox+ux*7,y1:y1+oy+uy*7,x2:x2+ox-ux*8,y2:y2+oy-uy*8,stroke:on?"#e6edf3":"#4aa8ff",
-      "stroke-width":w,"stroke-opacity":SEL?(on?.9:.06):.18+.6*p.handoffs/maxh,"marker-end":"url(#ar-"+(on?"b":"a")+")"});
-    ln.appendChild(el("title",null,p.from+" → "+p.to+": "+fmt(p.handoffs)+" handoffs, "+fmt(p.aircraft)+" aircraft, last "+ago(p.last,D.now)));
+  const defs=el("defs");const m=el("marker",{id:"ar",viewBox:"0 0 10 10",refX:9,refY:5,markerWidth:4.5,markerHeight:4.5,orient:"auto"});
+  m.appendChild(el("path",{d:"M0 0L10 5L0 10z",fill:"#e6edf3"}));defs.appendChild(m);s.appendChild(defs);
+  s.appendChild(el("rect",{x:0,y:0,width:W,height:H,fill:"var(--water)",stroke:"var(--line)"}));
+  const bgG=outlines(s,X,Y,lo0,la0,lo1,la1);
+  const draw=MERGED.filter(p=>at[p.a]&&at[p.b]).slice(0,NP),maxn=Math.max(...draw.map(p=>p.n),1),boxes=[];
+  // line ends both off one side of the view can't cross it
+  const off=(a,b)=>(a.lon<lo0&&b.lon<lo0)||(a.lon>lo1&&b.lon>lo1)||(a.lat<la0&&b.lat<la0)||(a.lat>la1&&b.lat>la1);
+  draw.slice().reverse().forEach(p=>{const a=at[p.a],b=at[p.b];if(off(a,b))return;
+    const on=SEL&&(p.a===SEL||p.b===SEL);if(on)return;
+    const ln=el("line",{x1:X(a.lon),y1:Y(a.lat),x2:X(b.lon),y2:Y(b.lat),stroke:"#4aa8ff",
+      "stroke-width":.7+4.5*Math.sqrt(p.n/maxn),"stroke-opacity":SEL?.07:.15+.55*p.n/maxn,"stroke-linecap":"round"});
+    ln.appendChild(el("title",null,p.a+" ⇄ "+p.b+": "+fmt(p.n)+" handoffs ("+p.a+"→"+p.b+" "+fmt(p.ab)+", "+p.b+"→"+p.a+" "+fmt(p.ba)+"), last "+ago(p.last,D.now)));
     s.appendChild(ln);});
-  const maxd=Math.max(...shown.map(x=>x.in+x.out));
-  shown.forEach(x=>{const cx=X(x.lon),cy=Y(x.lat),on=x.station===SEL,r=3+5*Math.sqrt((x.in+x.out)/maxd);
+  if(SEL&&at[SEL]){  // the selected station's pairs, every one, one arrow per direction
+    const mine=D.pairs.filter(p=>(p.from===SEL||p.to===SEL)&&at[p.from]&&at[p.to]),mx=Math.max(...mine.map(p=>p.handoffs),1);
+    mine.slice().reverse().forEach(p=>{const a=at[p.from],b=at[p.to],x1=X(a.lon),y1=Y(a.lat),x2=X(b.lon),y2=Y(b.lat);
+      const len=Math.hypot(x2-x1,y2-y1);if(len<14)return;
+      const ux=(x2-x1)/len,uy=(y2-y1)/len,ox=-uy*2.5,oy=ux*2.5;
+      const ln=el("line",{x1:x1+ox+ux*7,y1:y1+oy+uy*7,x2:x2+ox-ux*8,y2:y2+oy-uy*8,stroke:p.from===SEL?"#e6edf3":"#f2cc60",
+        "stroke-width":.8+4*Math.sqrt(p.handoffs/mx),"stroke-opacity":.85,"marker-end":"url(#ar)"});
+      ln.appendChild(el("title",null,p.from+" → "+p.to+": "+fmt(p.handoffs)+" handoffs, "+fmt(p.aircraft)+" aircraft"));
+      s.appendChild(ln);});}
+  const vis=st.filter(inView),maxd=Math.max(...st.map(x=>x.in+x.out));
+  vis.forEach(x=>{const cx=X(x.lon),cy=Y(x.lat),on=x.station===SEL,r=2.5+5*Math.sqrt((x.in+x.out)/maxd);
     const q=el("rect",{x:cx-r,y:cy-r,width:2*r,height:2*r,rx:2,fill:on?"#e6edf3":"#4aa8ff",stroke:"#0e1116",
-      "fill-opacity":SEL&&!on?.5:1,style:"cursor:pointer"});
+      "fill-opacity":SEL&&!on?.55:1,style:"cursor:pointer","data-st":x.station});
     q.appendChild(el("title",null,x.station+": "+fmt(x.in)+" handoffs in, "+fmt(x.out)+" out, "+fmt(x.aircraft)+" aircraft; position ±"+(x.spread_km||"?")+" km"));
-    q.addEventListener("click",e=>{e.stopPropagation();select(x.station);});
     s.appendChild(q);boxes.push([cx-r,cy-r,2*r,2*r]);});
   const hit=(a,b)=>a[0]<b[0]+b[2]&&b[0]<a[0]+a[2]&&a[1]<b[1]+b[3]&&b[1]<a[1]+a[3];
-  shown.slice().sort((a,b)=>(b.station===SEL)-(a.station===SEL)||(b.in+b.out)-(a.in+a.out)).slice(0,30).forEach(x=>{
+  vis.slice().sort((a,b)=>(b.station===SEL)-(a.station===SEL)||(b.in+b.out)-(a.in+a.out)).forEach(x=>{
     const cx=X(x.lon),cy=Y(x.lat),w=x.station.length*7.2,h=12;
     for(const [dx,dy] of [[9,-h/2],[-9-w,-h/2],[-w/2,-9-h],[-w/2,9]]){const b=[cx+dx,cy+dy,w,h];
       if(b[0]<0||b[1]<0||b[0]+w>W||b[1]+h>H||boxes.some(q=>hit(b,q)))continue;
-      boxes.push(b);const t=el("text",{x:b[0],y:b[1]+h-2,class:"stl","fill-opacity":SEL&&x.station!==SEL?.4:1},x.station);
-      t.addEventListener("click",e=>{e.stopPropagation();select(x.station);});s.appendChild(t);break;}});
-  placeNames(bgG,X,Y,...view,boxes);
+      boxes.push(b);s.appendChild(el("text",{x:b[0],y:b[1]+h-2,class:"stl","fill-opacity":SEL&&x.station!==SEL?.45:1,"data-st":x.station},x.station));break;}});
+  placeNames(bgG,X,Y,lo0,la0,lo1,la1,boxes);
+  // scale bar
+  const kmpx=111.2/sc,nice=[5,10,20,25,50,100,200,250,500,1000].find(v=>v/kmpx>=70)||1000,bw=nice/kmpx;
+  s.appendChild(el("rect",{x:10,y:H-30,width:bw+16,height:22,rx:4,fill:"var(--panel)","fill-opacity":.8}));
+  s.appendChild(el("line",{x1:18,y1:H-14,x2:18+bw,y2:H-14,stroke:"var(--fg)","stroke-width":2}));
+  s.appendChild(el("text",{x:18,y:H-18,class:"mapax"},nice+" km"));
+  V.hidden=st.length-vis.length;V.drawn=draw.length;
+  if(!SEL)info();
 }
 function info(){
   const box=$("sel");
-  if(!SEL){const t=D.totals;box.textContent=t.placed+" of "+t.stations+" stations placed; "+
-    (t.stations-t.placed)+" too few positions to place yet. Busiest 300 pairs drawn.";return;}
+  if(!SEL){const t=D.totals,v=V||{};box.textContent="Busiest "+fmt(v.drawn||0)+" of "+fmt(MERGED.length)+" station pairs drawn. "+
+    t.placed+" of "+t.stations+" stations placed ("+(t.stations-t.placed)+" too few positions yet)"+
+    (v.hidden?"; "+v.hidden+" outside this view: zoom out, drag, or press Fit all":"")+".";return;}
   const s=D.stations.find(x=>x.station===SEL);if(!s){box.textContent="";return;}
   const out=D.pairs.filter(p=>p.from===SEL).slice(0,6).map(p=>p.to+" "+fmt(p.handoffs)).join(", ");
   const inn=D.pairs.filter(p=>p.to===SEL).slice(0,6).map(p=>p.from+" "+fmt(p.handoffs)).join(", ");
   box.innerHTML="<b>"+esc(SEL)+"</b>: "+fmt(s.in)+" handoffs in, "+fmt(s.out)+" out, "+fmt(s.aircraft)+" aircraft. "+
-    "Hands on to: "+esc(out||"—")+". Takes from: "+esc(inn||"—")+". Click again to clear.";
+    "Hands on to (white): "+esc(out||"—")+". Takes from (yellow): "+esc(inn||"—")+". Click again to clear.";
 }
 function drawTables(){
   const rows=(SEL?D.pairs.filter(p=>p.from===SEL||p.to===SEL):D.pairs).slice(0,25);
@@ -261,7 +321,7 @@ function render(){
   const t=D.totals;
   $("cards").innerHTML=card("Handoffs",fmt(t.handoffs),"last "+label())+card("Station pairs",fmt(t.pairs))+
     card("Stations",fmt(t.stations),t.placed+" placed")+card("Aircraft handed on",fmt(t.aircraft));
-  drawMap();drawTables();info();
+  mergePairs();drawMap();drawTables();info();
 }
 async function load(){
   const st=$("status");
@@ -302,7 +362,9 @@ async function showAircraft(q){
     (a.xid_destinations.length?'<table><thead><tr><th>Day</th><th>Destination in its XIDs</th></tr></thead><tbody>'+a.xid_destinations.slice(0,20).map(x=>
       '<tr><td class="dim">'+x.day+'</td><td class="mono" title="'+esc(x.name)+'">'+esc(x.airport)+'</td></tr>').join("")+'</tbody></table>':'<div class="empty">no routes in its messages</div>'))+'</div></div>';
   box.innerHTML=h;
-  box.querySelectorAll(".chip").forEach(c=>c.addEventListener("click",()=>{SEL=null;select(c.dataset.st);$("map").scrollIntoView({behavior:"smooth"});}));
+  box.querySelectorAll(".chip").forEach(c=>c.addEventListener("click",()=>{SEL=null;select(c.dataset.st);
+    const x=D&&D.stations.find(v=>v.station===c.dataset.st);if(x&&x.lat!=null&&V){V.cx=x.lon;V.cy=x.lat;drawMap();}
+    $("map").scrollIntoView({behavior:"smooth"});}));
 }
 $("acform").addEventListener("submit",e=>{e.preventDefault();showAircraft($("acq").value.trim());});
 fetch("/api/graph?list=1").then(r=>r.json()).then(d=>{$("aclist").innerHTML=(d.aircraft||[]).map(a=>
