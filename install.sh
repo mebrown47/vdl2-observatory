@@ -119,7 +119,10 @@ info "Preflight"
 have systemctl || die "systemd is required"
 have sudo || die "sudo is required"
 if [ "$DRY_RUN" -eq 0 ]; then
-  sudo -v || die "sudo failed"
+  # Try a no-password check first: "sudo -v" asks for a password whenever any
+  # matching rule needs one (e.g. %sudo alongside a NOPASSWD rule, as on
+  # Raspberry Pi OS), even though the commands themselves would not.
+  sudo -n true 2>/dev/null || sudo -v || die "sudo failed"
 fi
 RUN_USER="$(id -un)"
 ok "user: $RUN_USER   arch: $(uname -m)   $(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-unknown OS}")"
