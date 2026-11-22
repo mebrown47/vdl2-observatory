@@ -39,6 +39,14 @@ that start at boot:
 | `vdl2-rollup.timer` | folds the archive into the Observatory database every minute |
 | `vdl2-observatory` | the VDL2 Observatory dashboard on 8891 |
 
+**The pages have no login.** The live page (8889) and the Observatory (8891) answer anyone who can
+reach those ports: they only read, and can't change the receiver or its settings, but they show
+the aircraft and ground stations your receiver hears, which says roughly where it is. On a home
+network that's usually fine. Before opening the ports to the internet, put them behind a reverse
+proxy with a login (nginx or Caddy with basic auth, say) or allow only the addresses you trust in
+the firewall (`ufw allow from 203.0.113.7 to any port 8891`). The servers are simple, made for a
+handful of viewers; heavy traffic from the internet can slow them down.
+
 Settings live in `/etc/vdl2-observatory.conf` (`sudo systemctl restart vdl2-sniffer` after an
 edit); program files in `/opt/vdl2-observatory`; the archive and database in
 `/var/lib/vdl2-observatory`. Later:
