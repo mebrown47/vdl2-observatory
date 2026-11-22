@@ -9,7 +9,8 @@ Rebuild data/waypoints.csv with the FAA's current fix positions.
 FAA_CSV is the FAA fix list (columns fix_identifier, state, description;
 the position is the DDD-MM-SS.ssssN DDD-MM-SS.ssssW pair in the
 description). It is public domain. The base is the existing global file
-(X-Plane earth_fix.dat, GPL v3; Global Aviation Waypoints, MIT).
+(X-Plane earth_fix.dat, GPL v3; it also held Global Aviation Waypoints' fixes
+until remove_scraped_fixes.py took them out, 2026-11-21).
 
 For every fix the FAA lists, the FAA position wins: base entries with the
 same name inside the FAA's area (any 1-degree cell holding an FAA fix, or

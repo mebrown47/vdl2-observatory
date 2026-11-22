@@ -10,7 +10,6 @@ still applies to those parts:
 | `basestation.*`, `waypoint_db.*`, `acars_position.*` (from iridium-sniffer) | GPL-3.0-or-later | CEMAXECUTER LLC | `../LICENSE` |
 | The VDL2 decoder, `third_party/vdl2/` | MIT | Luigi F. Cruz (CyberEther's licence; the decoder is Mike Brown's, written for CyberEther) | `../third_party/vdl2/LICENSE` |
 | `data/waypoints.csv`: fixes from X-Plane's `earth_fix.dat` | GPL-3.0 | as distributed with X-Plane | `../LICENSE` |
-| `data/waypoints.csv`: fixes from Global Aviation Waypoints | MIT | Fayyaz Ali Khan | `MIT-Global-Aviation-Waypoints.txt` |
 | `data/waypoints.csv`: FAA fix positions | public domain (US government work) | | |
 | `data/outlines.json`: map outlines and towns | public domain | Natural Earth | `Natural-Earth.txt` |
 | `observatory/data/airports.csv`: airports | public domain | OurAirports (ourairports.com) | |

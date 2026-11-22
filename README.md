@@ -261,8 +261,11 @@ of coordinates gives that fix, looked up in the fix list; the aircraft may be we
 lookup is held to `POS` reports because anywhere else it matches ordinary words. Positions go into
 the JSON (`ac_pos`), the `acars` and `vpos` archive events and the summary line.
 
-The fix list (`data/waypoints.csv`, 147,503 fixes) is built by `data/build_waypoints.py`: the FAA's
-fix positions where it lists the fix, X-Plane's and the Global Aviation Waypoints list elsewhere.
+The fix list (`data/waypoints.csv`, 133,674 fixes) holds the FAA's fix positions where it lists the
+fix (`data/build_waypoints.py`) and X-Plane's elsewhere. Fixes that came only from the Global
+Aviation Waypoints list were taken out (`data/remove_scraped_fixes.py`): that list is scraped from
+OpenNav, whose terms for redistributing it are unknown. They were 9% of the file, and in a month
+on a feeder no position came from a named fix at all.
 
 ## XID
 
@@ -301,6 +304,6 @@ dashboard estimates each station's position instead, from the positions of aircr
 GPL-3.0-or-later (`LICENSE`). The decoder in `third_party/vdl2` is Mike Brown's, under the MIT
 licence of CyberEther, the project it is written for. `basestation.c`, `waypoint_db.c` and
 `acars_position.c` come from iridium-sniffer. The fix list combines X-Plane's `earth_fix.dat`
-(GPL-3.0), Global Aviation Waypoints (MIT) and the FAA's fix data (public domain). The map outlines
+(GPL-3.0) and the FAA's fix data (public domain). The map outlines
 are Natural Earth (public domain). [LICENSES/](LICENSES/README.md) lists every part with its licence,
 holder and notice, and the libraries it links to.

@@ -6,9 +6,10 @@
  * source when ACARS messages reference waypoints by name without
  * explicit coordinates.
  *
- * Database sources: X-Plane earth_fix.dat (GPL v3),
- * Global Aviation Waypoints (MIT), and the FAA's fix list (public domain),
- * whose positions win for every fix it lists (data/build_waypoints.py).
+ * Database sources: X-Plane earth_fix.dat (GPL v3) and the FAA's fix list
+ * (public domain), whose positions win for every fix it lists
+ * (data/build_waypoints.py). The fixes only Global Aviation Waypoints gave
+ * were removed (data/remove_scraped_fixes.py).
  *
  * Copyright (c) 2026 CEMAXECUTER LLC
  * SPDX-License-Identifier: GPL-3.0-or-later
