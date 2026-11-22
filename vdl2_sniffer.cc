@@ -982,9 +982,14 @@ int main(int argc, char** argv) {
         // Where the aircraft is, by the rules of
         // acars_aircraft_position (shared with iridium-sniffer): only what the aircraft sent; coordinates
         // in the text, else the fix a POS report names.
+        // One position per ACARS message: a multi-block message is read once,
+        // whole, when libacars completes it. Read block by block, each block
+        // gave the last entry it holds (an older one, of a position history
+        // such as Southwest's ++86501 list) at the time of the newest.
         double plat = 0, plon = 0;
         const char* psrc = nullptr;
-        if (ac) {
+        const auto prsm = content ? content->reassembly : V::AcarsContent::Reassembly::None;
+        if (ac && prsm != V::AcarsContent::Reassembly::Partial && prsm != V::AcarsContent::Reassembly::Repeat) {
             const int src = acars_aircraft_position(label.c_str(), text.c_str(), fromAircraft, &plat, &plon);
             psrc = src == ACARS_POS_TEXT ? "text" : src == ACARS_POS_FIX ? "fix" : nullptr;
         }
