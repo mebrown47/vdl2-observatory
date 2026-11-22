@@ -153,7 +153,8 @@ def graph_api(db_path, q):
     if q.get("list"):
         return {"aircraft": graph.aircraft_list(db_path)}
     try:
-        hours = max(1, min(24 * 90, int(q.get("hours", ["168"])[0])))
+        hours = int(q.get("hours", ["168"])[0])
+        hours = 0 if hours <= 0 else min(hours, 24 * 3660)      # 0: all
     except ValueError:
         hours = 168
     return graph.build_network(db_path, st, hours=hours)

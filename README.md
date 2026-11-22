@@ -227,20 +227,19 @@ python3 observatory/server.py --db observatory/observatory.db      # http://HOST
     rounded to 0.1°.
   - Only decoded frames carry a position, so it shows where aircraft are heard, not where they're
     missed. Positions farther than a VHF receiver can hear (600 km) are set aside and counted.
-- **Graph** (`/graph`): the ground-station network as aircraft move through it, the counterpart
-  of iridium-observatory's Graph tab.
-  - A map of the pairs of stations aircraft were handed between in the last day, week or month:
-    each XID names the station the aircraft leaves and the one it joins. One line per pair,
-    thicker for more handoffs; the busiest 100 by default (50, 300 or all). Stations sit at
-    their estimated positions (the Overview's), so distant ones lean towards the receiver.
-  - The map opens on the busy core (the middle 80% of stations, weighted by handoffs), so a few
-    far-off stations don't shrink the rest; scroll to zoom, drag to move, or fit every station.
-    Lines to stations outside the view run off its edge. Click a station to see its handoffs
-    each way, as arrows.
-  - Tables of the busiest pairs and stations.
-  - One aircraft, by registration, flight or address: messages per day, the stations it used,
-    its recent handoffs, and the routes its own messages gave, by day. It links to the aircraft's
-    messages in Search and, if heard in the last day, to its track on Flights.
+- **Graph** (`/graph`): who hands aircraft to whom, laid out like iridium-observatory's Graph tab.
+  Each XID names the ground station the aircraft leaves and the one it joins.
+  - A diagram of the busiest station pairs in the last day, week, month or all time: left, the
+    station the aircraft left; right, the one it joined; line width by aircraft. Click a station
+    to show only its handoffs. A table lists the pairs.
+  - One aircraft, by registration, flight or address: messages and heartbeats per day, the
+    stations it used, the destinations in its XIDs, its message labels, aircraft served by the
+    same station within 15 minutes, and its handoffs and the routes its messages gave. It links
+    to the aircraft's messages in Search and, if heard in the last day, its track on Flights.
+  - A station map, closed until opened: the same handoffs at the stations' estimated positions
+    (the Overview's), opening on the busy core (the middle 80% of stations, weighted by
+    handoffs); scroll to zoom, drag to move, or fit every station. Distant stations lean
+    towards the receiver, as on the Overview.
 
 `rollup.py` reads only what was appended since its last run, so run it every few minutes from a
 timer or cron. The server reads the database only and never talks to vdl2-sniffer. Port 8891 is

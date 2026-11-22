@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
 VDL2 Observatory — the Graph page (/graph), drawn from /api/graph (graph.py):
-the ground-station handoff network on a map, and one aircraft's history.
+the station handoff diagram and pairs (laid out like iridium-observatory's
+Graph tab), one aircraft's history, and the same handoffs on a map.
 
 The map helpers (outlines, town names) are the Overview page's
 (vdl2_view.py), repeated here so each page stands alone.
@@ -90,43 +91,83 @@ GRAPH_PAGE = r"""<!doctype html>
   .bars i{flex:1;background:var(--accent);opacity:.8;min-width:2px;border-radius:2px 2px 0 0}
   .axis{display:flex;justify-content:space-between;color:var(--dim);font-size:10.5px}
   a{color:var(--accent)}
+  .seg{display:flex;gap:4px}
+  .seg button{background:var(--panel);color:var(--dim);border:1px solid var(--line);
+    border-radius:6px;padding:4px 11px;font-size:12.5px;cursor:pointer}
+  .seg button.on{color:var(--fg);background:var(--panel2);border-color:var(--accent)}
+  .bar{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;align-items:center}
+  main{max-width:1200px}
+  .card{padding:12px 14px}
+  .card .v{font-size:22px;margin-top:3px;font-variant-numeric:tabular-nums}
+  .panel{padding:14px}
+  .panel h2{font-size:14px;margin:0 0 4px;display:block}
+  .meta{color:var(--dim);font-size:12px;margin-bottom:10px}
+  #diagram svg,#actl svg{width:100%;height:auto}
+  .lbl{fill:var(--fg);font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;cursor:pointer}
+  .sublbl{fill:var(--dim);font-size:11px}
+  .note{color:var(--dim);font-size:12.5px;line-height:1.55}
+  .note b{color:var(--fg)}
+  .chip b{font-weight:600}
+  .chip.link{cursor:pointer}
+  .acgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+  @media (max-width:900px){.acgrid{grid-template-columns:minmax(0,1fr)}}
+  h3{font-size:12.5px;color:var(--dim);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 4px}
+  details.panel summary{cursor:pointer;font-size:14px;font-weight:600}
+  details.panel summary .meta{font-weight:400;margin:0 0 0 6px}
+  .maptools{display:flex;gap:16px;flex-wrap:wrap;margin:10px 0}
+  .maptools .lab{color:var(--dim);font-size:11.5px;margin-right:2px;align-self:center}
 </style></head>
 <body>
 <header>
   <h1>VDL2 Observatory</h1>
   <nav class="nav"><a href="/">Overview</a><a href="/messages">Messages</a><a href="/search">Search</a><a href="/flights">Flights</a><a href="/coverage">Coverage</a><a href="/graph" class="on">Graph</a><a id="livelink" href="#" hidden>Live</a></nav>
-  <span class="sub">how ground stations hand aircraft on, and one aircraft's history</span>
+  <span class="sub">who hands aircraft to whom, from XID handoffs</span>
   <span class="spacer"></span>
-  <div class="controls" id="win">
-    <button data-h="24">24h</button>
-    <button data-h="168" class="on">7d</button>
-    <button data-h="720">30d</button>
-  </div>
-  <span class="status" id="status"><span class="dot"></span>loading…</span>
+  <span class="status" id="status">loading…</span>
 </header>
 <main>
+  <div class="bar">
+    <div class="seg" id="win"><button data-h="24">24h</button><button data-h="168" class="on">7d</button>
+      <button data-h="720">30d</button><button data-h="0">all</button></div>
+  </div>
   <div class="cards" id="cards"></div>
   <div class="panel">
-    <h2><span>Handoff network <span class="hint">a line for each pair of stations aircraft were handed between (an XID names the station it leaves and the one it joins), thicker for more handoffs; stations at their estimated positions (see the Overview). Scroll to zoom, drag to move, click a station for its handoffs each way</span></span>
-      <span class="controls"><span class="controls" id="lines"><span class="lab">Lines</span><button data-n="50">50</button><button data-n="100" class="on">100</button><button data-n="300">300</button><button data-n="0">all</button></span>
-      <span class="controls" id="mapctl"><span class="lab">Zoom</span><button data-a="in" title="zoom in">+</button><button data-a="out" title="zoom out">−</button><button data-a="core" title="the stations that carry most handoffs">Fit core</button><button data-a="all" title="every placed station">Fit all</button></span></span></h2>
+    <h2>Station handoffs</h2>
+    <div class="meta">Left: the ground station the aircraft left. Right: the station it joined (an XID names both).
+      Line width: aircraft. The busiest pairs are shown; hover a line or name for counts, click a station to show only its handoffs.</div>
+    <div id="diagram"></div>
+  </div>
+  <div class="panel">
+    <h2>Handoffs, by pair</h2>
+    <div class="meta" id="tablenote"></div>
+    <div id="table"></div>
+  </div>
+  <div class="panel" id="aircraft">
+    <h2>One aircraft</h2>
+    <div class="meta">Type a registration, flight or address, or pick one of the most active. Shows when it was
+      heard, the stations it used, its handoffs and the routes its messages gave, and aircraft served by the
+      same stations at the same times.</div>
+    <div class="bar"><input id="tail" list="tails" placeholder="registration, flight or address, e.g. N828NV"
+      style="background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:13px;width:280px">
+      <datalist id="tails"></datalist>
+      <div class="seg"><button id="go">Show</button></div><span class="meta" id="acnote" style="margin:0"></span></div>
+    <div id="acview"></div>
+  </div>
+  <details class="panel" id="mappanel">
+    <summary>Station map <span class="meta">the same handoffs at the stations' estimated positions</span></summary>
+    <div class="maptools">
+      <span class="seg" id="lines"><span class="lab">Lines</span><button data-n="50">50</button><button data-n="100" class="on">100</button><button data-n="300">300</button><button data-n="0">all</button></span>
+      <span class="seg" id="mapctl"><span class="lab">Zoom</span><button data-a="in" title="zoom in">+</button><button data-a="out" title="zoom out">−</button><button data-a="core" title="the stations that carry most handoffs">Fit core</button><button data-a="all" title="every placed station">Fit all</button></span>
+    </div>
     <div id="map"></div>
-    <div id="sel" class="sel"></div>
-  </div>
-  <div class="grid">
-    <div class="panel">
-      <h2>Busiest handoffs <span class="hint">by handoffs in the window</span></h2>
-      <div id="pairs"></div>
-    </div>
-    <div class="panel">
-      <h2>Stations <span class="hint">handoffs in and out, distinct aircraft heard</span></h2>
-      <div id="stations"></div>
-    </div>
-  </div>
-  <div class="panel" id="acpanel">
-    <h2><span>One aircraft <span class="hint">by registration, flight or address: when it was heard, the stations it used, its handoffs and the routes its messages gave</span></span>
-      <form class="find" id="acform"><input id="acq" list="aclist" placeholder="registration, flight or address" autocomplete="off"><datalist id="aclist"></datalist><button type="submit">Show</button></form></h2>
-    <div id="ac"><div class="empty">pick an aircraft</div></div>
+    <div class="meta" id="mapnote" style="margin:6px 0 0"></div>
+  </details>
+  <div class="panel note">
+    <b>Where this comes from:</b> every XID an aircraft sends when it joins a ground station names the station it
+    is leaving, so each one is a handoff between two stations. This shows which stations pass traffic to which,
+    summed over many aircraft. Stations have no names on the air, only six-character addresses such as 11495A;
+    on the map they sit where the aircraft talking to them reported themselves (the Overview's estimates), which
+    pulls distant stations towards this receiver.
   </div>
 </main>
 <script>
@@ -135,15 +176,79 @@ if(LIVE_PORT){const h=location.hostname,a=document.getElementById("livelink");
   a.href=location.protocol+"//"+(h.includes(":")?"["+h+"]":h)+":"+LIVE_PORT+"/";a.hidden=false;}
 const NS="http://www.w3.org/2000/svg",$=id=>document.getElementById(id);
 function el(tag,attrs,txt){const e=document.createElementNS(NS,tag);
-  for(const k in attrs)e.setAttribute(k,attrs[k]);if(txt!=null)e.textContent=txt;return e;}
+  for(const k in attrs)if(attrs[k]!=null)e.setAttribute(k,attrs[k]);if(txt!=null)e.textContent=txt;return e;}
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 function fmt(n){return n==null?"—":n.toLocaleString("en-US");}
+function card(k,v,sub){return '<div class="card"><div class="k">'+k+'</div><div class="v">'+v+(sub?' <small>'+sub+'</small>':'')+'</div></div>';}
 function ago(t,now){const s=Math.max(0,(now||Date.now()/1000)-t);
   return s<90?Math.round(s)+"s ago":s<5400?Math.round(s/60)+"m ago":s<172800?Math.round(s/3600)+"h ago":Math.round(s/86400)+"d ago";}
-function utc(t){return new Date(t*1000).toISOString().replace("T"," ").slice(0,16)+"Z";}
-let hours=168,D=null,SEL=(location.hash.match(/st=([0-9A-Fa-f]{6})/)||[])[1]||null,AC=null;
-if(SEL)SEL=SEL.toUpperCase();
+function dt(t){return t?new Date(t*1000).toLocaleDateString():"";}
+let hours=168,D=null,SEL=null,MAPOPEN=false;
 
+// ---- the handoff diagram: the busiest pairs, at most MAXN stations a side ----
+const MAXN=15;
+function diagramPairs(){
+  const src=SEL?D.pairs.filter(p=>p.from===SEL||p.to===SEL):D.pairs;
+  const byAc=src.slice().sort((a,b)=>b.aircraft-a.aircraft||b.handoffs-a.handoffs),L=new Set(),R=new Set(),out=[];
+  for(const p of byAc){const nl=L.has(p.from)?0:1,nr=R.has(p.to)?0:1;
+    if(L.size+nl>MAXN||R.size+nr>MAXN)continue;L.add(p.from);R.add(p.to);out.push(p);if(out.length>=40)break;}
+  return out;
+}
+function diagram(){
+  const host=$("diagram");host.innerHTML="";
+  const pairs=diagramPairs();
+  if(!pairs.length){host.innerHTML='<div class="empty">No handoffs in this window yet.</div>';return;}
+  const st={};D.stations.forEach(s=>st[s.station]=s);
+  const uniq=(k)=>[...new Set(pairs.map(p=>p[k]))];
+  const left=uniq("from").sort((a,b)=>(st[b]||{}).handed_on-(st[a]||{}).handed_on);
+  const right=uniq("to").sort((a,b)=>(st[b]||{}).received-(st[a]||{}).received);
+  const li={},ri={};left.forEach((k,i)=>li[k]=i);right.forEach((k,i)=>ri[k]=i);
+  const row=40,top=24,W=900,xl=200,xr=650,H=top+Math.max(left.length,right.length)*row+10;
+  const svg=el("svg",{viewBox:"0 0 "+W+" "+H,role:"img","aria-label":"Station handoff diagram"});host.appendChild(svg);
+  const yl=k=>top+li[k]*row+row/2,yr=k=>top+ri[k]*row+row/2,max=Math.max(...pairs.map(p=>p.aircraft));
+  pairs.slice().reverse().forEach(p=>{const y1=yl(p.from),y2=yr(p.to),mx=(xl+xr)/2,w=1.5+7*Math.sqrt(p.aircraft/max);
+    const back=D.pairs.find(q=>q.from===p.to&&q.to===p.from);
+    const path=el("path",{d:"M"+(xl+8)+" "+y1+"C"+mx+" "+y1+" "+mx+" "+y2+" "+(xr-8)+" "+y2,fill:"none",
+      stroke:"var(--accent)","stroke-opacity":0.55,"stroke-width":w});
+    path.appendChild(el("title",null,p.from+" → "+p.to+"\n"+fmt(p.aircraft)+" aircraft, "+fmt(p.handoffs)+" handoffs\nlast "+ago(p.last,D.now)+
+      (back?"\nthe other way: "+fmt(back.aircraft)+" aircraft":"")));
+    svg.appendChild(path);});
+  const node=(k,x,y,side)=>{const s=st[k]||{},on=k===SEL,n=side==="l"?s.handed_on:s.received;
+    svg.appendChild(el("circle",{cx:x,cy:y,r:6,fill:side==="l"?"var(--fg)":"var(--accent)",stroke:on?"var(--warn)":null,"stroke-width":on?3:null}));
+    const tx=side==="l"?x-14:x+14,anchor=side==="l"?"end":"start";
+    const t=el("text",{x:tx,y:y+4,"text-anchor":anchor,class:"lbl","data-st":k,fill:on?"var(--warn)":null},k);
+    t.appendChild(el("title",null,k+": handed on "+fmt(s.handed_on)+" aircraft, received "+fmt(s.received)+
+      (s.lat!=null?"; placed ±"+(s.spread_km||"?")+" km":"; not placed yet")+"\nclick to show only its handoffs"));
+    t.addEventListener("click",()=>select(k));svg.appendChild(t);
+    svg.appendChild(el("text",{x:tx,y:y+17,"text-anchor":anchor,class:"sublbl"},(side==="l"?"handed on ":"received ")+fmt(n)+" aircraft"));};
+  left.forEach(k=>node(k,xl,yl(k),"l"));right.forEach(k=>node(k,xr,yr(k),"r"));
+}
+function table(){
+  const rows=(SEL?D.pairs.filter(p=>p.from===SEL||p.to===SEL):D.pairs).slice().sort((a,b)=>b.aircraft-a.aircraft||b.handoffs-a.handoffs);
+  $("tablenote").innerHTML=(SEL?'Only <b>'+esc(SEL)+'</b>’s handoffs. <a href="#" id="clr" style="color:var(--accent)">Show all</a>. ':"")+
+    fmt(rows.length)+" pairs"+(rows.length>40?", the busiest 40 shown":"")+".";
+  const c=$("clr");if(c)c.onclick=e=>{e.preventDefault();select(SEL);};
+  let h='<table><tr><th>from</th><th>to</th><th class="n">aircraft</th><th class="n">handoffs</th><th class="n">last seen</th></tr>';
+  rows.slice(0,40).forEach(p=>{h+='<tr><td class="mono">'+esc(p.from)+'</td><td class="mono">'+esc(p.to)+'</td><td class="n">'+fmt(p.aircraft)+
+    '</td><td class="n">'+fmt(p.handoffs)+'</td><td class="n">'+ago(p.last,D.now)+'</td></tr>';});
+  $("table").innerHTML=rows.length?h+'</table>':'<div class="empty">none</div>';
+}
+function select(k){SEL=SEL===k?null:k;history.replaceState(null,"",SEL?"#st="+SEL:location.pathname+location.search);
+  diagram();table();if(MAPOPEN)drawMap();}
+function render(){
+  const t=D.totals,win=hours?(hours>=720?"30 days":hours>=168?"7 days":hours+" h"):"all time";
+  $("cards").innerHTML=card("Aircraft",fmt(t.aircraft),"handed on")+card("Handoffs",fmt(t.handoffs),win)+
+    card("Station pairs",fmt(t.pairs),"")+card("Stations",fmt(t.stations),t.placed+" on the map");
+  mergePairs();diagram();table();if(MAPOPEN)drawMap();
+}
+async function load(){
+  try{const d=await (await fetch("/api/graph?hours="+hours)).json();
+    if(d.error){$("diagram").innerHTML='<div class="empty">'+esc(d.error)+'</div>';$("status").textContent=d.error;return;}
+    D=d;render();$("status").textContent="updated "+new Date().toLocaleTimeString();
+  }catch(e){$("status").textContent="fetch failed";}
+}
+
+// ---- the station map (closed until asked for) ----
 let OUT=null,OUTP=[],outKey="",outD={};
 const OUTSTYLE={land:["var(--land)","var(--coast)",1],lake:["var(--water)","var(--coast)",.8],
   state:["none","var(--state)",.8],border:["none","var(--border)",1.1]};
@@ -186,10 +291,6 @@ function placeNames(g,X,Y,lo0,la0,lo1,la1,boxes){
     if(++n>=30)break;
   }
 }
-function select(st){SEL=SEL===st?null:st;
-  history.replaceState(null,"",SEL?"#st="+SEL:location.pathname+location.search);
-  drawMap();drawTables();info();}
-
 // The map view: centre (lon, lat) and scale (px per degree of latitude), on
 // an equirectangular projection squeezed by cos(latitude). It opens on the
 // busy core and keeps whatever view the viewer zooms or drags to.
@@ -291,89 +392,74 @@ function drawMap(){
   s.appendChild(el("line",{x1:18,y1:H-14,x2:18+bw,y2:H-14,stroke:"var(--fg)","stroke-width":2}));
   s.appendChild(el("text",{x:18,y:H-18,class:"mapax"},nice+" km"));
   V.hidden=st.length-vis.length;V.drawn=draw.length;
-  if(!SEL)info();
+  const note=document.getElementById("mapnote");if(note)note.textContent="Busiest "+fmt(draw.length)+" of "+fmt(MERGED.length)+" station pairs drawn"+
+    (V.hidden?"; "+V.hidden+" stations outside this view: zoom out, drag, or press Fit all":"")+".";
 }
-function info(){
-  const box=$("sel");
-  if(!SEL){const t=D.totals,v=V||{};box.textContent="Busiest "+fmt(v.drawn||0)+" of "+fmt(MERGED.length)+" station pairs drawn. "+
-    t.placed+" of "+t.stations+" stations placed ("+(t.stations-t.placed)+" too few positions yet)"+
-    (v.hidden?"; "+v.hidden+" outside this view: zoom out, drag, or press Fit all":"")+".";return;}
-  const s=D.stations.find(x=>x.station===SEL);if(!s){box.textContent="";return;}
-  const out=D.pairs.filter(p=>p.from===SEL).slice(0,6).map(p=>p.to+" "+fmt(p.handoffs)).join(", ");
-  const inn=D.pairs.filter(p=>p.to===SEL).slice(0,6).map(p=>p.from+" "+fmt(p.handoffs)).join(", ");
-  box.innerHTML="<b>"+esc(SEL)+"</b>: "+fmt(s.in)+" handoffs in, "+fmt(s.out)+" out, "+fmt(s.aircraft)+" aircraft. "+
-    "Hands on to (white): "+esc(out||"—")+". Takes from (yellow): "+esc(inn||"—")+". Click again to clear.";
-}
-function drawTables(){
-  const rows=(SEL?D.pairs.filter(p=>p.from===SEL||p.to===SEL):D.pairs).slice(0,25);
-  $("pairs").innerHTML=rows.length?'<table><thead><tr><th>From</th><th></th><th>To</th><th class="n">Handoffs</th><th class="n">Aircraft</th><th class="n">Last</th></tr></thead><tbody>'+
-    rows.map(p=>'<tr><td class="mono">'+esc(p.from)+'</td><td class="dim">→</td><td class="mono">'+esc(p.to)+'</td><td class="n">'+fmt(p.handoffs)+
-      '</td><td class="n">'+fmt(p.aircraft)+'</td><td class="n dim">'+ago(p.last,D.now)+'</td></tr>').join("")+'</tbody></table>':'<div class="empty">no handoffs</div>';
-  const st=D.stations.filter(s=>s.in+s.out>0).slice(0,25);
-  $("stations").innerHTML='<table><thead><tr><th>Station</th><th class="n">In</th><th class="n">Out</th><th class="n">Aircraft</th><th class="n">Placed</th></tr></thead><tbody>'+
-    st.map(s=>'<tr class="row'+(s.station===SEL?" on":"")+'" data-st="'+s.station+'"><td class="mono">'+esc(s.station)+'</td><td class="n">'+fmt(s.in)+
-      '</td><td class="n">'+fmt(s.out)+'</td><td class="n">'+fmt(s.aircraft)+'</td><td class="n dim">'+(s.lat!=null?"±"+(s.spread_km||"?")+" km":"not yet")+'</td></tr>').join("")+'</tbody></table>';
-  $("stations").querySelectorAll("tr.row").forEach(tr=>tr.addEventListener("click",()=>select(tr.dataset.st)));
-}
-function card(k,v,sub){return '<div class="card"><div class="k">'+k+'</div><div class="v">'+v+(sub?' <small>'+sub+'</small>':'')+'</div></div>';}
-function label(){return hours>=720?"30 days":hours>=168?"7 days":hours+" h";}
-function render(){
-  const t=D.totals;
-  $("cards").innerHTML=card("Handoffs",fmt(t.handoffs),"last "+label())+card("Station pairs",fmt(t.pairs))+
-    card("Stations",fmt(t.stations),t.placed+" placed")+card("Aircraft handed on",fmt(t.aircraft));
-  mergePairs();drawMap();drawTables();info();
-}
-async function load(){
-  const st=$("status");
-  try{const d=await (await fetch("/api/graph?hours="+hours)).json();
-    if(d.error){$("map").innerHTML='<div class="empty">'+esc(d.error)+'</div>';st.innerHTML='<span class="dot" style="background:var(--warn)"></span>'+esc(d.error);return;}
-    D=d;render();st.innerHTML='<span class="dot"></span>updated '+new Date().toLocaleTimeString();
-  }catch(e){st.innerHTML='<span class="dot" style="background:var(--warn)"></span>fetch failed';}
-}
+$("mappanel").addEventListener("toggle",()=>{MAPOPEN=$("mappanel").open;if(MAPOPEN&&D)drawMap();});
 
-// one aircraft
-async function showAircraft(q){
-  if(!q)return;
-  history.replaceState(null,"","?ac="+encodeURIComponent(q)+location.hash);
-  const box=$("ac");box.innerHTML='<div class="empty">loading…</div>';
-  const a=await (await fetch("/api/graph?aircraft="+encodeURIComponent(q))).json();
-  if(a.error){box.innerHTML='<div class="empty">'+esc(a.error)+'</div>';return;}
-  AC=a;const now=a.now,recent=a.last&&now-a.last<86400;
-  let h='<div class="cards">'+card("Aircraft",'<span class="mono">'+esc(a.regs[0]||a.icao)+'</span>',esc(a.icao))+
-    card("Heard",a.first?ago(a.last,now):"—",a.first?"first "+utc(a.first).slice(0,10):"")+
-    card("Messages",fmt(a.msgs),"on "+fmt(a.days.filter(d=>d.msgs+d.acks).length)+" days")+card("Positions",fmt(a.positions))+'</div>';
-  h+='<div class="sel">Flights: <span class="mono">'+esc(a.flights.slice(0,8).map(f=>f.flight).join(", ")||"—")+'</span>'+
-    (a.regs.length>1?' · also registered as <span class="mono">'+esc(a.regs.slice(1).join(", "))+'</span>':'')+
-    (a.others.length?' · other aircraft matched: <span class="mono">'+esc(a.others.join(", "))+'</span>':'')+
-    ' · <a href="/search?ac='+encodeURIComponent(a.icao)+'">its messages in Search</a>'+
-    (recent?' · <a href="/flights#ac='+encodeURIComponent(a.icao)+'">its track on Flights</a>':'')+'</div>';
-  if(a.days.length){const mx=Math.max(...a.days.map(d=>d.msgs+d.acks));
-    h+='<div class="sel">Messages per day (UTC)</div><div class="bars">'+a.days.map(d=>'<i title="'+d.day+": "+d.msgs+" messages, "+d.acks+
-      ' heartbeats" style="height:'+Math.max(2,70*(d.msgs+d.acks)/mx)+'px"></i>').join("")+'</div><div class="axis"><span>'+a.days[0].day+
-      '</span><span>'+a.days[a.days.length-1].day+'</span></div>';}
-  h+='<div class="sel">Stations it used (click to show on the map)</div><div class="chips">'+(a.stations.slice(0,24).map(s=>
-    '<span class="chip" data-st="'+s.station+'">'+esc(s.station)+' <span class="dim">'+s.n+'</span></span>').join("")||'<span class="dim">none</span>')+'</div>';
-  h+='<div class="grid"><div><div class="sel">Recent handoffs</div>'+(a.handoffs.length?'<table><thead><tr><th>Time</th><th>From</th><th></th><th>To</th><th>Going to</th></tr></thead><tbody>'+
-    a.handoffs.slice(0,20).map(x=>'<tr><td class="dim">'+utc(x.t)+'</td><td class="mono">'+esc(x.from||"—")+'</td><td class="dim">→</td><td class="mono">'+esc(x.to)+
-      '</td><td class="mono">'+esc(x.airport)+'</td></tr>').join("")+'</tbody></table>':'<div class="empty">no handoffs heard</div>')+'</div>';
-  h+='<div><div class="sel">Routes from its messages, by day</div>'+(a.routes.length?'<table><thead><tr><th>Day</th><th>Flight</th><th>Route</th><th>From</th></tr></thead><tbody>'+
-    a.routes.slice(0,20).map(r=>'<tr><td class="dim">'+r.day+'</td><td class="mono">'+esc(r.flight)+'</td><td class="mono" title="'+esc(r.origin_name+" → "+r.dest_name)+'">'+
-      esc(r.origin)+" → "+esc(r.dest)+'</td><td class="dim">'+esc(r.src)+'</td></tr>').join("")+'</tbody></table>':
-    (a.xid_destinations.length?'<table><thead><tr><th>Day</th><th>Destination in its XIDs</th></tr></thead><tbody>'+a.xid_destinations.slice(0,20).map(x=>
-      '<tr><td class="dim">'+x.day+'</td><td class="mono" title="'+esc(x.name)+'">'+esc(x.airport)+'</td></tr>').join("")+'</tbody></table>':'<div class="empty">no routes in its messages</div>'))+'</div></div>';
-  box.innerHTML=h;
-  box.querySelectorAll(".chip").forEach(c=>c.addEventListener("click",()=>{SEL=null;select(c.dataset.st);
-    const x=D&&D.stations.find(v=>v.station===c.dataset.st);if(x&&x.lat!=null&&V){V.cx=x.lon;V.cy=x.lat;drawMap();}
-    $("map").scrollIntoView({behavior:"smooth"});}));
+// ---- one aircraft ----
+function activity(host,a){
+  host.innerHTML="";const days=a.days;
+  if(!days.length){host.innerHTML='<div class="meta">no messages</div>';return;}
+  const nd=days.length,W=900,H=110,pl=34,pr=8,pb=20,pt=6,iw=W-pl-pr,ih=H-pt-pb,bw=Math.max(1,Math.min(18,iw/nd-1));
+  const max=Math.max(...days.map(x=>x.msgs+x.acks),1);
+  const svg=el("svg",{viewBox:"0 0 "+W+" "+H,role:"img","aria-label":"Messages per day"});host.appendChild(svg);
+  const X=i=>pl+iw*i/nd,Y=v=>pt+ih*(1-v/max);
+  [0,max].forEach(v=>{svg.appendChild(el("line",{x1:pl,x2:W-pr,y1:Y(v),y2:Y(v),stroke:"var(--grid)"}));
+    svg.appendChild(el("text",{x:pl-6,y:Y(v)+4,"text-anchor":"end",class:"sublbl"},v));});
+  days.forEach((x,i)=>{const tip=x.day+": "+x.msgs+" messages, "+x.acks+" heartbeats";
+    const g=el("rect",{x:X(i),y:Y(x.msgs+x.acks),width:bw,height:ih*x.acks/max,fill:"var(--dim)","fill-opacity":0.45});
+    g.appendChild(el("title",null,tip));svg.appendChild(g);
+    const c=el("rect",{x:X(i),y:Y(x.msgs),width:bw,height:ih*x.msgs/max,fill:"var(--accent)"});
+    c.appendChild(el("title",null,tip));svg.appendChild(c);});
+  svg.appendChild(el("text",{x:pl,y:H-4,class:"sublbl"},days[0].day));
+  svg.appendChild(el("text",{x:W-pr,y:H-4,"text-anchor":"end",class:"sublbl"},days[nd-1].day));
 }
-$("acform").addEventListener("submit",e=>{e.preventDefault();showAircraft($("acq").value.trim());});
-fetch("/api/graph?list=1").then(r=>r.json()).then(d=>{$("aclist").innerHTML=(d.aircraft||[]).map(a=>
-  '<option value="'+esc(a.reg||a.icao)+'">'+esc((a.flight||"")+" "+a.icao+", "+a.msgs+" messages")+'</option>').join("");}).catch(()=>{});
-document.querySelectorAll("#win button").forEach(b=>b.addEventListener("click",()=>{
-  document.querySelectorAll("#win button").forEach(x=>x.classList.toggle("on",x===b));hours=+b.dataset.h;load();}));
-let rt=null;window.addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>{if(D)drawMap();},200);});
+function chips(list,f){return '<div class="chips">'+(list.length?list.map(f).join(""):'<span class="meta">none</span>')+'</div>';}
+function showAircraft(q){
+  q=(q||"").trim();if(!q)return;$("tail").value=q;
+  history.replaceState(null,"","?ac="+encodeURIComponent(q)+location.hash);
+  fetch("/api/graph?aircraft="+encodeURIComponent(q)).then(r=>r.json()).then(a=>{
+    const v=$("acview");
+    if(a.error){v.innerHTML='<div class="empty">'+esc(a.error)+'</div>';return;}
+    const acks=a.days.reduce((t,d)=>t+d.acks,0),heard=a.days.filter(d=>d.msgs+d.acks).length;
+    let h='<div class="cards">'+card("Messages",fmt(a.msgs-acks),"content")+card("Heartbeats",fmt(acks),"")+
+      card("Days heard",fmt(heard),"")+card("Seen",dt(a.first),"to "+dt(a.last))+'</div>';
+    h+='<div class="meta" style="margin:0">'+esc(a.regs[0]||"")+' · address <span class="mono">'+esc(a.icao)+'</span> · flights <span class="mono">'+
+      esc(a.flights.slice(0,6).map(f=>f.flight).join(", ")||"—")+'</span>'+(a.others.length?' · other aircraft matched: <span class="mono">'+esc(a.others.join(", "))+'</span>':'')+'</div>';
+    h+='<h3>Messages per day</h3><div id="actl"></div><div class="meta">blue: messages; grey: heartbeats</div>';
+    h+='<div class="acgrid"><div><h3>Ground stations</h3>'+chips(a.stations.slice(0,16),g=>'<span class="chip link" data-st="'+esc(g.station)+'"><b class="mono">'+esc(g.station)+'</b> '+g.n+'</span>');
+    const dests={};a.xid_destinations.forEach(x=>dests[x.airport]=(dests[x.airport]||0)+1);
+    h+='<h3>Destinations in its XIDs</h3>'+chips(Object.entries(dests).sort((x,y)=>y[1]-x[1]).slice(0,12),d=>'<span class="chip"><b>'+esc(d[0])+'</b> '+d[1]+(d[1]>1?' days':' day')+'</span>');
+    h+='<h3>Message labels</h3>'+chips(a.labels,l=>'<span class="chip">'+esc(l[0])+' '+l[1]+'</span>')+'</div>';
+    h+='<div><h3>Related aircraft</h3><div class="meta">served by the same station within '+Math.round(a.co_present_s/60)+' minutes</div>'+
+      chips(a.related,r=>'<span class="chip link" data-ac="'+esc(r.icao)+'"><b>'+esc(r.reg||r.icao)+'</b> ×'+r.times+' · '+esc(r.stations.join(", "))+'</span>')+'</div></div>';
+    const ev=a.handoffs.map(x=>({t:x.t,what:"handoff"+(x.airport?", going to "+x.airport:""),from:x.from||"(first contact)",to:x.to}))
+      .concat(a.routes.map(r=>({t:r.t,what:"route "+r.origin+" → "+r.dest+" ("+r.src+")"+(r.flight?", "+r.flight:""),from:"",to:""})))
+      .sort((x,y)=>y.t-x.t).slice(0,40);
+    h+='<h3>Handoffs and routes</h3>';
+    if(ev.length){h+='<table class="ev"><tr><th>time (UTC)</th><th>event</th><th>from</th><th>to</th></tr>';
+      ev.forEach(e=>{h+='<tr><td>'+new Date(e.t*1000).toISOString().slice(0,16).replace("T"," ")+'</td><td>'+esc(e.what)+
+        '</td><td class="mono">'+esc(e.from)+'</td><td class="mono">'+esc(e.to)+'</td></tr>';});h+='</table>';}
+    else h+='<div class="meta">none</div>';
+    h+='<p class="meta">Its messages: <a href="/search?ac='+encodeURIComponent(a.icao)+'" style="color:var(--accent)">Search, '+esc(a.regs[0]||a.icao)+'</a>'+
+      (a.last&&a.now-a.last<86400?' · its track: <a href="/flights#ac='+encodeURIComponent(a.icao)+'" style="color:var(--accent)">Flights</a>':'')+'</p>';
+    v.innerHTML=h;activity($("actl"),a);
+    v.querySelectorAll(".chip.link[data-ac]").forEach(c=>c.onclick=()=>showAircraft(c.dataset.ac));
+    v.querySelectorAll(".chip.link[data-st]").forEach(c=>c.onclick=()=>{SEL=null;select(c.dataset.st);$("diagram").scrollIntoView({behavior:"smooth"});});
+  });
+}
+fetch("/api/graph?list=1").then(r=>r.json()).then(d=>{const l=d.aircraft||[];
+  $("tails").innerHTML=l.map(a=>'<option value="'+esc(a.reg||a.icao)+'">'+esc((a.flight||"")+" "+a.icao+", "+a.msgs+" messages")+'</option>').join("");
+  $("acnote").textContent=l.length?"most active: "+l.slice(0,5).map(a=>a.reg||a.icao).join(", "):"";
+  const q0=new URLSearchParams(location.search).get("ac");showAircraft(q0||(l[0]&&(l[0].reg||l[0].icao)));}).catch(()=>{});
+$("go").onclick=()=>showAircraft($("tail").value);
+$("tail").onkeydown=e=>{if(e.key==="Enter")showAircraft(e.target.value);};
+$("win").onclick=e=>{const b=e.target.closest("button");if(!b)return;
+  hours=+b.dataset.h;[...b.parentNode.children].forEach(x=>x.classList.toggle("on",x===b));load();};
+{const m=location.hash.match(/st=([0-9A-Fa-f]{6})/);if(m)SEL=m[1].toUpperCase();}
+let rt=null;window.addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>{if(D&&MAPOPEN)drawMap();},200);});
 load();setInterval(load,300000);
-const q0=new URLSearchParams(location.search).get("ac");if(q0){$("acq").value=q0;showAircraft(q0);}
 </script>
 </body></html>
 """

@@ -29,23 +29,29 @@ def _con(path):
     return sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=5)
 
 
+HANDOFF = ("from_gs IS NOT NULL AND from_gs != '' AND from_gs != gs "
+           "AND from_gs != '000000' AND gs != '000000'")   # 000000: a placeholder, not a station
+CO_PRESENT_S = 900      # "related aircraft": the same station within 15 minutes
+
+
 def build_network(db_path, stations, hours=168, now=None):
-    """stations: vdl2_view.estimate_stations() output (all time)."""
+    """stations: vdl2_view.estimate_stations() output (all time). hours=0: all."""
     now = time.time() if now is None else now
-    t0 = now - hours * 3600
+    t0 = now - hours * 3600 if hours else 0
     con = _con(db_path)
     try:
         pairs = con.execute(
             "SELECT from_gs, gs, COUNT(*), COUNT(DISTINCT icao), MAX(t) FROM vdl2_xid "
-            "WHERE t >= ? AND t <= ? AND from_gs IS NOT NULL AND from_gs != '' AND from_gs != gs "
-            "AND from_gs != '000000' AND gs != '000000' "   # a placeholder, not a station
-            "GROUP BY from_gs, gs", (t0, now)).fetchall()
+            "WHERE t >= ? AND t <= ? AND " + HANDOFF + " GROUP BY from_gs, gs", (t0, now)).fetchall()
+        senders = dict(con.execute("SELECT from_gs, COUNT(DISTINCT icao) FROM vdl2_xid WHERE t >= ? AND t <= ? AND "
+                                   + HANDOFF + " GROUP BY from_gs", (t0, now)).fetchall())
+        receivers = dict(con.execute("SELECT gs, COUNT(DISTINCT icao) FROM vdl2_xid WHERE t >= ? AND t <= ? AND "
+                                     + HANDOFF + " GROUP BY gs", (t0, now)).fetchall())
         heard = dict(con.execute(
             "SELECT gs, COUNT(DISTINCT icao) FROM vdl2_xid WHERE t >= ? AND t <= ? AND gs != '000000' GROUP BY gs",
             (t0, now)).fetchall())
-        n_ac = con.execute("SELECT COUNT(DISTINCT icao) FROM vdl2_xid WHERE t >= ? AND t <= ? "
-                           "AND from_gs IS NOT NULL AND from_gs != '' AND from_gs != gs "
-                           "AND from_gs != '000000' AND gs != '000000'", (t0, now)).fetchone()[0]
+        n_ac = con.execute("SELECT COUNT(DISTINCT icao) FROM vdl2_xid WHERE t >= ? AND t <= ? AND " + HANDOFF,
+                           (t0, now)).fetchone()[0]
     finally:
         con.close()
     est = {s["station"]: s for s in stations}
@@ -62,7 +68,8 @@ def build_network(db_path, stations, hours=168, now=None):
         out_st.append({"station": gs, "lat": e.get("lat"), "lon": e.get("lon"),
                        "spread_km": e.get("spread_km"), "n_pos": e.get("n_pos", 0),
                        "out": deg.get(gs, [0, 0])[0], "in": deg.get(gs, [0, 0])[1],
-                       "aircraft": heard.get(gs, 0)})
+                       "aircraft": heard.get(gs, 0), "handed_on": senders.get(gs, 0),
+                       "received": receivers.get(gs, 0)})
     out_st.sort(key=lambda s: -(s["in"] + s["out"]))
     out_pairs = [{"from": f, "to": g, "handoffs": n, "aircraft": ac, "last": int(last)}
                  for f, g, n, ac, last in sorted(pairs, key=lambda p: -p[2])]
@@ -73,7 +80,7 @@ def build_network(db_path, stations, hours=168, now=None):
                        "aircraft": n_ac}}
 
 
-def aircraft_list(db_path, days=7, now=None, limit=400):
+def aircraft_list(db_path, days=30, now=None, limit=400):
     """The aircraft heard most in the last days, for the page's suggestions."""
     now = time.time() if now is None else now
     con = _con(db_path)
@@ -137,6 +144,21 @@ def build_aircraft(db_path, ref, q, now=None):
                          (icao, icao)).fetchall()
         msgs = con.execute("SELECT t, flt, dir, txt FROM messages WHERE icao=? AND dir='UL' ORDER BY t DESC "
                            "LIMIT 3000", (icao,)).fetchall()
+        labels = con.execute("SELECT lbl, COUNT(*) FROM messages WHERE icao=? AND lbl != '_d' GROUP BY lbl "
+                             "ORDER BY 2 DESC LIMIT 12", (icao,)).fetchall()
+        related = {}
+        for t, f, g, kind, ap in xids[-300:]:
+            for other, in con.execute("SELECT DISTINCT icao FROM vdl2_xid WHERE t BETWEEN ? AND ? AND gs = ? "
+                                      "AND icao != ?", (t - CO_PRESENT_S, t + CO_PRESENT_S, g, icao)):
+                r = related.setdefault(other, {"times": 0, "stations": set()})
+                r["times"] += 1
+                r["stations"].add(g)
+        top = sorted(related.items(), key=lambda kv: -kv[1]["times"])[:12]
+        names = {}
+        for other, _ in top:
+            row = con.execute("SELECT reg FROM messages WHERE icao=? AND reg != '' ORDER BY t DESC LIMIT 1",
+                              (other,)).fetchone()
+            names[other] = row[0] if row else ""
         npos = con.execute("SELECT COUNT(*) FROM vdl2_pos WHERE icao=? AND src IN ('xid','text','adsc')",
                            (icao,)).fetchone()[0]
     finally:
@@ -165,6 +187,10 @@ def build_aircraft(db_path, ref, q, now=None):
         "handoffs": [{"t": int(t), "from": f or "", "to": g, "kind": k or "", "airport": ap or ""}
                      for t, f, g, k, ap in xids[-60:]][::-1],
         "routes": routes[:40],
+        "labels": labels,
+        "related": [{"icao": o, "reg": names[o], "times": r["times"], "stations": sorted(r["stations"])[:3]}
+                    for o, r in top],
+        "co_present_s": CO_PRESENT_S,
         "xid_destinations": [{"day": d, "airport": ap, "name": ref.airport_name(ap), "t": t}
                              for (d, ap), t in sorted(dests.items(), key=lambda kv: -kv[1])][:40],
         "now": int(now)}

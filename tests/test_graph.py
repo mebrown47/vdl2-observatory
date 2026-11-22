@@ -66,6 +66,9 @@ check(not any("000000" in (x["from"], x["to"]) for x in n["pairs"]) and "000000"
       "the 000000 placeholder is not a station")
 s = {x["station"]: x for x in n["stations"]}
 check(s["AAAAAA"]["out"] == 3 and s["AAAAAA"]["in"] == 1, "station in/out")
+check(s["AAAAAA"]["handed_on"] == 2 and s["BBBBBB"]["received"] == 2 and s["AAAAAA"]["received"] == 1,
+      "distinct aircraft handed on and received per station", s["AAAAAA"])
+check(len(graph.build_network(db, stations, hours=0, now=NOW)["pairs"]) == 3, "hours=0 is all time")
 check("CCCCCC" in s and s["CCCCCC"]["lat"] is None, "a station without a position is listed, unplaced")
 check(n["totals"]["placed"] == 2 and n["totals"]["handoffs"] == 4 and n["totals"]["aircraft"] == 2, "totals", n["totals"])
 check(len(graph.build_network(db, stations, hours=168 * 2, now=NOW)["pairs"]) == 3, "a longer window reaches further back")
@@ -79,6 +82,9 @@ check(a["msgs"] == 2 and len(a["days"]) == 1 and a["days"][0]["msgs"] == 1 and a
 check([h["to"] for h in a["handoffs"]] == ["AAAAAA", "BBBBBB", "BBBBBB"], "its handoffs, newest first", a["handoffs"])
 check({x["station"] for x in a["stations"]} == {"AAAAAA", "BBBBBB"}, "stations it used")
 check(a["routes"] and (a["routes"][0]["origin"], a["routes"][0]["dest"]) == ("KATL", "KMCO"), "route from its own message", a["routes"])
+check([r["icao"] for r in a["related"]] == ["A00002"] and a["related"][0]["reg"] == "N2BB",
+      "related: another aircraft at the same station within 15 minutes", a["related"])
+check(dict(a["labels"]) == {"H1": 1}, "message labels leave out heartbeats", a["labels"])
 check("error" in graph.build_aircraft(db, ref, "N9ZZ", now=NOW), "an unknown aircraft is reported")
 check("error" in graph.build_aircraft(db, ref, "", now=NOW), "an empty query is reported")
 lst = graph.aircraft_list(db, now=NOW)
