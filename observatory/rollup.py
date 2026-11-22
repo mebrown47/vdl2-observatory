@@ -656,8 +656,10 @@ def main():
 
     files = sorted(glob.glob(os.path.join(args.archive, "vdl2-*.jsonl")))
     if not files:
-        print(f"rollup: no archive files in {args.archive}", file=sys.stderr)
-        return 1
+        # A fresh install before the receiver has written anything: nothing
+        # to do yet, not a failure.
+        print(f"rollup: no archive files in {args.archive} yet")
+        return 0
 
     os.makedirs(os.path.dirname(os.path.abspath(args.db)), exist_ok=True)
     con = sqlite3.connect(args.db)

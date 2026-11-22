@@ -219,7 +219,10 @@ if [ "$DEPS" -eq 1 ]; then
     # SoapySDR and its modules for the other radios (they bring the HackRF's
     # and Airspy's udev rules too). Optional: without them the receiver is
     # RTL-SDR only.
-    SOAPY=(libsoapysdr-dev soapysdr-tools soapysdr-module-rtlsdr soapysdr-module-airspy soapysdr-module-hackrf)
+    # The modules by their own names, not the soapysdr-module-* meta packages:
+    # those insist on the distro's version, which a newer module from a PPA
+    # (DragonOS, the ProDesk spare) blocks.
+    SOAPY=(libsoapysdr-dev soapysdr-tools soapysdr0.8-module-rtlsdr soapysdr0.8-module-airspy soapysdr0.8-module-hackrf)
     if as_root apt-get install -y -q --no-install-recommends "${SOAPY[@]}"; then
       ok "SoapySDR installed, with the HackRF, Airspy R2 and RTL-SDR modules"
       # An HF+ plugged in now, or in the settings: its module too.
