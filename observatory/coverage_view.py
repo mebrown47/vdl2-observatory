@@ -260,6 +260,7 @@ function render(){
   if(st)c+=card("Median range",T.median_km!=null?T.median_km+" km":"—")+card("95% within",T.p95_km!=null?T.p95_km+" km":"—","farthest "+(T.max_km||"—")+" km");
   $("cards").innerHTML=c;
   $("loc").innerHTML=st?"Receiver location: "+esc(st.source)+", shown to 0.1°."+(T.beyond_horizon?" "+T.beyond_horizon+" positions farther than a VHF receiver can hear were set aside.":"")
+    :D.station_problem?'<span style="color:var(--warn)">The receiver\'s location in the settings was ignored: '+esc(D.station_problem)+'.</span> Fix <code>STATION</code> in <code>/etc/vdl2-observatory.conf</code> (<code>LAT,LON</code> or <code>LAT,LON,ANTENNA_M</code>, numbers only), then <code>sudo systemctl restart vdl2-observatory</code>. Until then there are no bearings, ranges or elevations.'
     :'The receiver\'s location isn\'t set, so there are no bearings, ranges or elevations. Set <code>STATION="LAT,LON,ANTENNA_M"</code> in <code>/etc/vdl2-observatory.conf</code> (antenna height above sea level, in metres; or re-run <code>./install.sh --reconfigure</code>), then <code>sudo systemctl restart vdl2-observatory</code>. With iridium-observatory running on this machine, its location is used instead.';
   drawMap();drawSky();drawDist();
 }

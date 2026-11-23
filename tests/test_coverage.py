@@ -42,6 +42,15 @@ check("setting LAT,LON", server.parse_station("40.0,-100.0") ==
       {"lat": 40.0, "lon": -100.0, "alt_m": 0.0, "source": "from the settings"})
 check("setting with antenna height and spaces", (server.parse_station(" 40.0, -100.0, 300") or {}).get("alt_m") == 300)
 check("bad settings are none", all(server.parse_station(x) is None for x in ("", "here", "95,10", "40,-200", "1,2,3,4")))
+# why a setting is ignored, without repeating it (the page may be public)
+why = server.station_problem("40.123,-100.456_Discone")
+check("a name after the longitude: says why", why and "other than numbers" in why and "40.123" not in why, why)
+check("too few numbers: says why", "two numbers" in (server.station_problem("40.1") or ""))
+check("out of range: says why", "between -90 and 90" in (server.station_problem("95,10") or ""))
+check("a good setting has no problem", server.station_problem("40.0,-100.0,300") is None)
+# an empty port setting (unset in the config file) falls back to the default
+conv = server.port_or(8889)
+check("an empty port falls back to the default", conv("") == 8889 and conv(" ") == 8889 and conv("8899") == 8899)
 
 # An archive through the rollup: two aircraft north and east of the receiver,
 # and one stray position far beyond the radio horizon.

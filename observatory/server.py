@@ -165,18 +165,32 @@ def graph_api(db_path, q):
 # (--station LAT,LON[,ANTENNA_M]) first, else iridium-observatory's fix on this
 # machine (its /api/sky station, from ring alerts), asked every 10 minutes.
 STATION = None
+STATION_PROBLEM = None      # why a STATION setting was ignored, for the Coverage page
 IRIDIUM_PORT = 8890
 _iridium = {"t": 0, "v": None}
 
 
+def station_problem(text):
+    """Why "LAT,LON[,ANTENNA_M]" can't be used, or None when it can. The
+    reason never repeats the value: the page may be public."""
+    parts = [x for x in (text or "").replace(" ", "").split(",") if x != ""]
+    if len(parts) not in (2, 3):
+        return "it needs two numbers (latitude, longitude) or three (with the antenna height in metres)"
+    try:
+        p = [float(x) for x in parts]
+    except ValueError:
+        return ("it has something other than numbers in it, such as a name after a number "
+                "(put notes on a # comment line instead)")
+    if not (-90 <= p[0] <= 90 and -180 <= p[1] <= 180):
+        return "the latitude must be between -90 and 90 and the longitude between -180 and 180"
+    return None
+
+
 def parse_station(text):
     """{"lat", "lon", "alt_m", "source"} from "LAT,LON[,ANTENNA_M]", or None."""
-    try:
-        p = [float(x) for x in (text or "").replace(" ", "").split(",") if x != ""]
-    except ValueError:
+    if station_problem(text):
         return None
-    if len(p) not in (2, 3) or not (-90 <= p[0] <= 90 and -180 <= p[1] <= 180):
-        return None
+    p = [float(x) for x in text.replace(" ", "").split(",") if x != ""]
     return {"lat": p[0], "lon": p[1], "alt_m": p[2] if len(p) == 3 else 0.0, "source": "from the settings"}
 
 
@@ -206,7 +220,10 @@ def coverage_api(db_path, hours):
         hours = 168
     if not os.path.exists(db_path):
         return {"error": "no database yet — run rollup.py first"}
-    return coverage.build_coverage(db_path, station(), hours=hours)
+    d = coverage.build_coverage(db_path, station(), hours=hours)
+    if STATION_PROBLEM and isinstance(d, dict):
+        d["station_problem"] = STATION_PROBLEM
+    return d
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -305,25 +322,38 @@ class Handler(BaseHTTPRequestHandler):
     do_HEAD = do_GET
 
 
+def port_or(default):
+    """An argparse type for a port that falls back to `default` when empty,
+    as an unset setting in the config file reaches us: better the usual port
+    than a dashboard that won't start."""
+    def conv(text):
+        text = (text or "").strip()
+        if not text:
+            print(f"vdl2 observatory: a port setting is empty; using {default}", file=sys.stderr)
+            return default
+        return int(text)
+    return conv
+
+
 def main():
-    global STATION, IRIDIUM_PORT
+    global STATION, STATION_PROBLEM, IRIDIUM_PORT
     ap = argparse.ArgumentParser(description="VDL2 Observatory server")
     ap.add_argument("--db", default=DB_PATH)
-    ap.add_argument("--port", type=int, default=PORT)
+    ap.add_argument("--port", type=port_or(PORT), default=PORT)
     ap.add_argument("--host", default="0.0.0.0")
-    ap.add_argument("--live-port", type=int, default=LIVE_PORT,
+    ap.add_argument("--live-port", type=port_or(LIVE_PORT), default=LIVE_PORT,
                     help="vdl2-sniffer's live page on this host, for the link to it (0 = no link)")
     ap.add_argument("--station", default="",
                     help="the receiver's location for the Coverage page: LAT,LON[,ANTENNA_M] "
                          "(antenna height above sea level, metres); empty = ask iridium-observatory")
-    ap.add_argument("--iridium-port", type=int, default=IRIDIUM_PORT,
+    ap.add_argument("--iridium-port", type=port_or(IRIDIUM_PORT), default=IRIDIUM_PORT,
                     help="iridium-observatory on this host, for its location when --station is "
                          "empty (0 = don't ask)")
     args = ap.parse_args()
     STATION = parse_station(args.station)
     if args.station and not STATION:
-        print(f"vdl2 observatory: ignoring --station {args.station!r}: expected LAT,LON[,ANTENNA_M]",
-              file=sys.stderr)
+        STATION_PROBLEM = station_problem(args.station)
+        print(f"vdl2 observatory: ignoring --station {args.station!r}: {STATION_PROBLEM}", file=sys.stderr)
     IRIDIUM_PORT = args.iridium_port
 
     Handler.db_path = args.db

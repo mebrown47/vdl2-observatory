@@ -466,11 +466,48 @@ choose_radio() {
 }
 
 # ---- config -----------------------------------------------------------------
+# A kept config may predate a setting, or have lost one in an edit: the
+# services read it directly and fail without them (an empty port stops the
+# Observatory), so add what is missing and repair an empty port, leaving
+# every other value as it is.
+repair_conf() {
+  local tmp changed="" k def v
+  tmp="$(mktemp)"; cat "$CONF" > "$tmp"
+  for k in RUN_USER VDL2_ARGS WEB_PORT OBS_PORT STATION; do
+    case "$k" in
+      RUN_USER) def="$(id -un)";; WEB_PORT) def=8889;; OBS_PORT) def=8891;; *) def="";;
+    esac
+    if ! grep -qE "^[[:space:]]*$k=" "$tmp"; then
+      printf '\n# Added by install.sh --update: this setting was missing.\n%s="%s"\n' "$k" "$def" >> "$tmp"
+      printf -v "$k" '%s' "$def"
+      changed+=" $k"
+    elif [ "$k" = WEB_PORT ] || [ "$k" = OBS_PORT ]; then
+      v="${!k}"
+      if ! [[ "$v" =~ ^[0-9]+$ ]]; then
+        sed -i -E "s|^[[:space:]]*$k=.*|# Repaired by install.sh --update: this was not a port.\n$k=\"$def\"|" "$tmp"
+        printf -v "$k" '%s' "$def"
+        changed+=" $k"
+      fi
+    fi
+  done
+  if [ -n "$changed" ]; then
+    root_write "$CONF" 0644 < "$tmp"
+    warn "$CONF was missing or had a broken setting; set to the default:$changed"
+  fi
+  rm -f "$tmp"
+  # The location is the user's to set; only say when the Observatory will ignore it.
+  if [ -n "${STATION:-}" ] && ! [[ "${STATION// /}" =~ ^-?[0-9]+(\.[0-9]+)?,-?[0-9]+(\.[0-9]+)?(,-?[0-9]+(\.[0-9]+)?)?$ ]]; then
+    warn "STATION in $CONF is not LAT,LON or LAT,LON,ANTENNA_M (numbers only; put notes in a # comment):"
+    warn "the Observatory will ignore it until it is fixed"
+  fi
+}
+
 if [ -f "$CONF" ] && [ "$MODE" != reconfigure ]; then
   info "Config"
   ok "keeping $CONF (./install.sh --reconfigure to redo it)"
   # shellcheck disable=SC1090
   . "$CONF"
+  repair_conf
 else
   info "Config"
   WEB_PORT=8889; OBS_PORT=8891; VDL2_ARGS=""; STATION=""
