@@ -1016,7 +1016,8 @@ int main(int argc, char** argv) {
             if (xid && f.sourceKind == 1 && (f.destKind == 4 || f.destKind == 5)) {
                 const auto* l = xid->aircraftLocation ? &*xid->aircraftLocation : nullptr;
                 web.xid(t, f.source, f.dest, xid->type, xid->destinationAirport, xid->alternateStations,
-                        l != nullptr, l ? l->lat : 0, l ? l->lon : 0, l && l->altFt ? *l->altFt : -1);
+                        l != nullptr, l ? Vdl2Xid::CellCentre(l->lat) : 0, l ? Vdl2Xid::CellCentre(l->lon) : 0,
+                        l && l->altFt ? *l->altFt : -1);
             }
             if (newPos && acSide) web.position(t, aircraft, station, plat, plon, psrc);
         }
@@ -1024,7 +1025,7 @@ int main(int argc, char** argv) {
         // BaseStation (SBS): what the aircraft reported, under its ICAO
         // address, with the flight from its latest ACARS. Coordinates in
         // the text are precise; an XID position is 0.1 degree (about
-        // 10 km), sent but not used for speed and heading; a named fix only
+        // 10 km; sent as its cell's centre), not used for speed and heading; a named fix only
         // with --basestation-fix.
         if (sbs) {
             const bool acSource = f.sourceKind == 1, acDest = f.destKind == 1;
@@ -1045,7 +1046,8 @@ int main(int argc, char** argv) {
             if (xid && xid->aircraftLocation && acSource) {
                 const auto& l = *xid->aircraftLocation;
                 basestation_send_position(hex6(f.source).c_str(), flight(f.source).c_str(),
-                                          l.lat, l.lon, l.altFt ? *l.altFt : -99999, 0, tNs);
+                                          Vdl2Xid::CellCentre(l.lat), Vdl2Xid::CellCentre(l.lon),
+                                          l.altFt ? *l.altFt : -99999, 0, tNs);
             }
         }
 

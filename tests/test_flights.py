@@ -129,7 +129,7 @@ with tempfile.TemporaryDirectory() as tmp:
           and con.execute("SELECT COUNT(*) FROM vdl2_xid WHERE lat=0 AND lon=0").fetchone()[0] == 0)
     centre = vdl2_view.receiver_centre(con)
     check("horizon centre from the XID positions when no location is set",
-          centre and abs(centre[0] - 31.3) < 0.01 and abs(centre[1] + 84.8) < 0.01, centre)
+          centre and abs(centre[0] - 31.35) < 0.01 and abs(centre[1] + 84.85) < 0.01, centre)   # cell centres
     check("the receiver's location wins when known",
           vdl2_view.receiver_centre(con, {"lat": 32.0, "lon": -86.0}) == (32.0, -86.0))
     check("a position beyond the horizon is set aside, one inside kept",

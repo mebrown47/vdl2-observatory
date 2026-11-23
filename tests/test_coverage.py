@@ -56,7 +56,8 @@ with tempfile.TemporaryDirectory() as tmp:
     ev = [
         fr(ms, "A00001", 31.5),
         {"e": "xid", "t": ms, "freq": 136975000, "src": "A00001", "sk": 1, "dst": "10423A", "dk": 5,
-         "x": {"type": "Handoff Initiation", "ac_location": {"lat": 40.9, "lon": -100.0, "alt_ft": 35000}}},
+         # sent as the corner of its 0.1-degree cell; the rollup reads the centre, 40.9, -100.0
+         "x": {"type": "Handoff Initiation", "ac_location": {"lat": 40.85, "lon": -99.95, "alt_ft": 35000}}},
         fr(ms + 5000, "A00002", 22.0),
         {"e": "vpos", "t": ms + 5000, "icao": "A00002", "gs": "10423A", "lat": 40.0, "lon": -97.65, "src": "text"},
         {"e": "acars", "t": ms + 5000, "sys": "vdl2", "dir": "UL", "freq": 136975000, "src": "A00002",

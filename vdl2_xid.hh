@@ -33,8 +33,14 @@ struct Param {
     std::vector<std::uint8_t> value;
 };
 
+// An XID position is sent in 0.1-degree steps cut toward zero: the aircraft
+// is somewhere in the cell beyond the value (measured against OpenSky, 0.05
+// degree further from zero on each axis on average). The centre of the cell
+// is the best estimate; Location keeps the value as sent.
+inline double CellCentre(double v) { return v > 0 ? v + 0.05 : v < 0 ? v - 0.05 : v; }
+
 struct Location {
-    double lat = 0, lon = 0;       // degrees, 0.1 resolution
+    double lat = 0, lon = 0;       // degrees, 0.1 resolution, as sent (see CellCentre)
     std::optional<int> altFt;      // absent when the octet is implausible
     int altRawFt = 0;              // the octet times 1000 ft, as sent
 };

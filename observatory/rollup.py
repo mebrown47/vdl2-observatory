@@ -187,6 +187,28 @@ def init_db(con):
     con.commit()
 
 
+# An XID position is sent in 0.1-degree steps cut toward zero (measured
+# against OpenSky: the aircraft is 0.05 degree further from zero on each
+# axis, on average), so the aircraft lies somewhere in the cell beyond the
+# value sent; its centre is the best estimate. The archive keeps the value
+# as sent; this is applied when it is read.
+XID_CELL = 0.1
+
+
+def xid_centre(v):
+    if v is None or v == 0:
+        return v
+    return round(v + (XID_CELL / 2 if v > 0 else -XID_CELL / 2), 2)
+
+
+# Text the engine's extractor (acars_position.c) no longer takes positions
+# from; positions ingested from it before are removed once (purge_text_rules).
+# A snapshot report ("02.51.19,CR,..."): a position from earlier in the
+# flight. A forecast point ("021546.1,,,N28249W081196"): the route ahead.
+SNAPSHOT_RE = re.compile(r"(^|[\r\n])[ \t]*\d\d\.\d\d\.\d\d,[A-Z]{2},")
+FORECAST_RE = re.compile(r"\d{6}\..,,,[NS]\d{5}[EW]\d{6}")
+
+
 def has_key(obj, name):
     """Recursively test whether a decoded-message tree contains a node
     whose key contains `name` (e.g. 'cpdlc', 'adsc'). libacars names its
@@ -492,6 +514,8 @@ class Agg:
                 if loc.get("lat") == 0 and loc.get("lon") == 0:
                     loc = {}        # no position (archives from before the decoder said so)
                 if loc.get("lat") is not None:
+                    loc = dict(loc, lat=xid_centre(loc["lat"]), lon=xid_centre(loc["lon"]))
+                if loc.get("lat") is not None:
                     self.v_pos.append([ts, icao, gs, loc["lat"], loc["lon"],
                                        loc.get("alt_ft"), "xid", self.snr_of(ev["t"], icao)])
                 self.v_xid.append((ts, icao, gs, from_gs, x.get("type", ""),
@@ -692,6 +716,42 @@ def backfill_pos(con, files, verbose):
     con.commit()
 
 
+def centre_xid(con):
+    """Once: move the XID positions already stored to the centre of their
+    0.1-degree cell (xid_centre); rows ingested from now on are centred as
+    they are read."""
+    if con.execute("SELECT value FROM meta WHERE key='xid_centre'").fetchone():
+        return
+    half = XID_CELL / 2
+    sql = ("UPDATE {t} SET lat = CASE WHEN lat > 0 THEN ROUND(lat + {h}, 2) WHEN lat < 0 THEN ROUND(lat - {h}, 2) ELSE lat END, "
+           "lon = CASE WHEN lon > 0 THEN ROUND(lon + {h}, 2) WHEN lon < 0 THEN ROUND(lon - {h}, 2) ELSE lon END "
+           "WHERE lat IS NOT NULL {w}")
+    n = con.execute(sql.format(t="vdl2_pos", h=half, w="AND src = 'xid'")).rowcount
+    con.execute(sql.format(t="vdl2_xid", h=half, w=""))
+    print(f"rollup: {n} XID positions moved to the centre of their cell")
+    con.execute("INSERT INTO meta(key,value) VALUES('xid_centre','done') "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    con.commit()
+
+
+def purge_text_rules(con):
+    """Once: remove text positions taken from snapshot reports and forecast
+    points before the extractor learnt to skip them."""
+    if con.execute("SELECT value FROM meta WHERE key='text_rules_2'").fetchone():
+        return
+    bad = [(icao, t) for t, icao, txt in con.execute(
+               "SELECT m.t, m.icao, m.txt FROM messages m JOIN vdl2_pos p "
+               "ON p.icao = m.icao AND p.t = m.t AND p.src = 'text'").fetchall()
+           if txt and (SNAPSHOT_RE.search(txt) or FORECAST_RE.search(txt))]
+    n = 0
+    for icao, t in bad:
+        n += con.execute("DELETE FROM vdl2_pos WHERE src='text' AND icao=? AND t=?", (icao, t)).rowcount
+    print(f"rollup: {n} text positions from snapshot reports and forecast lists removed")
+    con.execute("INSERT INTO meta(key,value) VALUES('text_rules_2','done') "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    con.commit()
+
+
 def ingest_file(con, path, agg, verbose):
     size = os.path.getsize(path)
     row = con.execute(
@@ -756,6 +816,8 @@ def main():
     init_db(con)
     backfill_icao(con, files, args.verbose)
     backfill_pos(con, files, args.verbose)
+    centre_xid(con)             # before ingesting: new rows are centred as they are read
+    purge_text_rules(con)
 
     agg = Agg()
     agg.load_state(con)
