@@ -56,17 +56,55 @@ HEARD_WEIGHT = 0.5
 EARTH_KM = 6371.0
 
 
-def estimate_stations(con):
+# This receiver hears aircraft directly over VHF, so no position it decodes
+# can be farther than the radio horizon; one that is (a misread text
+# position, a handoff giving 0, 0) is set aside. coverage.py's MAX_KM.
+HORIZON_KM = 600
+
+
+def receiver_centre(con, station=None):
+    """(lat, lon) to measure the horizon from: the receiver's location
+    ({"lat", "lon"}, from the settings or iridium-observatory) if known, else
+    the median of the latest XID positions, which are decoded, not read from
+    text. None with no positions at all."""
+    if station and station.get("lat") is not None:
+        return (station["lat"], station["lon"])
+    have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "vdl2_pos" not in have:
+        return None
+    pts = con.execute("SELECT lat, lon FROM vdl2_pos WHERE src='xid' AND NOT (lat=0 AND lon=0) "
+                      "ORDER BY t DESC LIMIT 5000").fetchall()
+    if not pts:
+        pts = con.execute("SELECT lat, lon FROM vdl2_pos ORDER BY t DESC LIMIT 5000").fetchall()
+    if not pts:
+        return None
+    la = sorted(p[0] for p in pts)
+    lo = sorted(p[1] for p in pts)
+    return (la[len(la) // 2], lo[len(lo) // 2])
+
+
+def in_range(centre, lat, lon):
+    return centre is None or _km(centre[0], centre[1], lat, lon) <= HORIZON_KM
+
+
+def estimate_stations(con, centre=None):
     """[{station, lat, lon, spread_km, n_target, n_heard, n_pos}] from every
-    XID position on record (all time: stations do not move). lat, lon and
-    spread_km are None below MIN_POSITIONS different positions."""
+    XID position on record (all time: stations do not move), leaving out
+    positions beyond the horizon from `centre` (receiver_centre() if not
+    given). lat, lon and spread_km are None below MIN_POSITIONS different
+    positions."""
     samples = {}
+    if centre is None:
+        centre = receiver_centre(con)
     have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if "vdl2_pos" in have:
         for gs, lat, lon, src in con.execute("SELECT gs,lat,lon,src FROM vdl2_pos"):
-            samples.setdefault(gs, []).append((lat, lon, SOURCE_WEIGHT.get(src, 0.5), 1))
+            if in_range(centre, lat, lon):
+                samples.setdefault(gs, []).append((lat, lon, SOURCE_WEIGHT.get(src, 0.5), 1))
     for gs, lat, lon, alt_gs in con.execute(
             "SELECT gs,lat,lon,alt_gs FROM vdl2_xid WHERE lat IS NOT NULL"):
+        if not in_range(centre, lat, lon):
+            continue
         for other in (alt_gs or "").split():
             if other != gs:
                 samples.setdefault(other, []).append((lat, lon, HEARD_WEIGHT, 0))
@@ -105,7 +143,7 @@ def _km(lat1, lon1, lat2, lon2):
     return 2 * EARTH_KM * math.asin(min(1.0, math.sqrt(a)))
 
 
-def build_vdl2(path, hours=None):
+def build_vdl2(path, hours=None, station=None):
     if not os.path.exists(path):
         return {"error": "no database yet — run rollup.py first"}
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
@@ -169,13 +207,16 @@ def build_vdl2(path, hours=None):
 
         xids, station_est, positions, pos_src = [], [], [], {}
         if "vdl2_xid" in have:
-            station_est = estimate_stations(con)
+            centre = receiver_centre(con, station)
+            station_est = estimate_stations(con, centre)
             xids = [dict(r) for r in rows(
                 "SELECT t,icao,gs,from_gs,kind,airport,lat,lon,alt FROM vdl2_xid "
                 "WHERE t>=? ORDER BY t DESC LIMIT 60", floor)]
         if "vdl2_pos" in have:
+            centre = receiver_centre(con, station)
             positions = [dict(r) for r in rows(
-                "SELECT icao,gs,lat,lon,src FROM vdl2_pos ORDER BY t DESC LIMIT 500")]
+                "SELECT icao,gs,lat,lon,src FROM vdl2_pos ORDER BY t DESC LIMIT 600")
+                if in_range(centre, r["lat"], r["lon"])][:500]
             pos_src = {r["src"]: r["n"] for r in rows(
                 "SELECT src,COUNT(*) n FROM vdl2_pos WHERE t>=? GROUP BY src", floor)}
 

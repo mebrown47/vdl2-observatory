@@ -35,6 +35,7 @@ import sqlite3
 import time
 
 import context
+import vdl2_view
 
 A = r"([A-Z]{4})"
 ROUTE_RULES = [
@@ -106,7 +107,9 @@ def _airport(ref, code):
             "pos": [round(p[0], 4), round(p[1], 4)] if p else None}
 
 
-def build_flights(db_path, ref, hours=6, now=None, stations=None):
+def build_flights(db_path, ref, hours=6, now=None, stations=None, centre=None):
+    """centre: (lat, lon) the radio horizon is measured from (see
+    vdl2_view.receiver_centre); positions beyond it are left out."""
     now = time.time() if now is None else now
     t0 = now - hours * 3600
     con = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True, timeout=5)
@@ -118,9 +121,11 @@ def build_flights(db_path, ref, hours=6, now=None, stations=None):
         msgs = con.execute(
             "SELECT id, t, icao, reg, flt, dir, lbl, txt FROM messages "
             "WHERE t >= ? AND t <= ? AND icao IS NOT NULL ORDER BY t", (t0, now)).fetchall()
-        pos = con.execute(
+        if centre is None:
+            centre = vdl2_view.receiver_centre(con)
+        pos = [r for r in con.execute(
             "SELECT t, icao, gs, lat, lon, alt, src FROM vdl2_pos "
-            "WHERE t >= ? AND t <= ? ORDER BY t", (t0, now)).fetchall()
+            "WHERE t >= ? AND t <= ? ORDER BY t", (t0, now)) if vdl2_view.in_range(centre, r[3], r[4])]
         xids = con.execute(
             "SELECT t, icao, gs, airport FROM vdl2_xid "
             "WHERE t >= ? AND t <= ? ORDER BY t", (t0, now)).fetchall()

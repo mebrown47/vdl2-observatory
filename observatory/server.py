@@ -124,7 +124,8 @@ def _shared(db_path, placed_only=True):
         if time.time() - _stations["t"] > 300:
             con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
             try:
-                _stations["v"] = vdl2_view.estimate_stations(con)
+                _stations["centre"] = vdl2_view.receiver_centre(con, station())
+                _stations["v"] = vdl2_view.estimate_stations(con, _stations["centre"])
             finally:
                 con.close()
             _stations["t"] = time.time()
@@ -140,7 +141,7 @@ def flights_api(db_path, hours):
     if not os.path.exists(db_path):
         return {"error": "no database yet — run rollup.py first"}
     ref, st = _shared(db_path)
-    return flights.build_flights(db_path, ref, hours=hours, stations=st)
+    return flights.build_flights(db_path, ref, hours=hours, stations=st, centre=_stations.get("centre"))
 
 
 def graph_api(db_path, q):
@@ -245,7 +246,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, self._page(vdl2_view.VDL2_PAGE), "text/html; charset=utf-8")
         elif u.path == "/api/vdl2":
             self._json(vdl2_view.build_vdl2, self.db_path,
-                       q.get("hours", [None])[0])
+                       q.get("hours", [None])[0], station())
         elif u.path == "/messages":
             self._send(200, self._page(messages_view.MESSAGES_PAGE),
                        "text/html; charset=utf-8")

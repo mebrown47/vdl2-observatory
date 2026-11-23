@@ -20,6 +20,7 @@ OBS = os.path.join(HERE, "..", "observatory")
 sys.path.insert(0, OBS)
 import context  # noqa: E402
 import flights  # noqa: E402
+import vdl2_view  # noqa: E402
 
 fails = 0
 
@@ -79,6 +80,10 @@ with tempfile.TemporaryDirectory() as tmp:
          "x": {"type": "Handoff Initiation", "dst_airport": "KTPA",
                "ac_location": {"lat": 31.3, "lon": -84.8, "alt_ft": 33000}}},
         {"e": "vpos", "t": ms + 3000, "icao": "AC2BE9", "gs": "112DCA", "lat": 31.265, "lon": -84.7833, "src": "text"},
+        # a misread text position (FANS hex read as N64116E140066) and a handoff giving 0, 0
+        {"e": "vpos", "t": ms + 3500, "icao": "AC2BE9", "gs": "112DCA", "lat": 64.1933, "lon": 140.11, "src": "text"},
+        {"e": "xid", "t": ms + 3600, "freq": 136975000, "src": "A0F1BB", "sk": 1, "dst": "2121A5", "dk": 5,
+         "x": {"type": "Handoff Initiation", "ac_location": {"lat": 0, "lon": 0, "alt_ft": 0}}},
         {"e": "xid", "t": ms + 4000, "freq": 136975000, "src": "A0F1BB", "sk": 1, "dst": "2121A5", "dk": 5,
          "x": {"type": "Handoff Initiation", "dst_airport": "KIAH"}},
     ]
@@ -118,6 +123,22 @@ with tempfile.TemporaryDirectory() as tmp:
     check("destination from the XID alone", b.get("route") is None and (b.get("xid_dest") or {}).get("code") == "KIAH", b)
     check("totals", d["totals"] == {"aircraft": 2, "with_track": 1, "with_route": 1, "with_destination": 2},
           d["totals"])
+    con = sqlite3.connect(db)
+    check("a handoff giving 0, 0 stores no position",
+          con.execute("SELECT COUNT(*) FROM vdl2_pos WHERE lat=0 AND lon=0").fetchone()[0] == 0
+          and con.execute("SELECT COUNT(*) FROM vdl2_xid WHERE lat=0 AND lon=0").fetchone()[0] == 0)
+    centre = vdl2_view.receiver_centre(con)
+    check("horizon centre from the XID positions when no location is set",
+          centre and abs(centre[0] - 31.3) < 0.01 and abs(centre[1] + 84.8) < 0.01, centre)
+    check("the receiver's location wins when known",
+          vdl2_view.receiver_centre(con, {"lat": 32.0, "lon": -86.0}) == (32.0, -86.0))
+    check("a position beyond the horizon is set aside, one inside kept",
+          not vdl2_view.in_range(centre, 64.1933, 140.11) and vdl2_view.in_range(centre, 33.0, -86.5))
+    est = {x["station"]: x for x in vdl2_view.estimate_stations(con, centre)}
+    con.close()
+    check("station estimates leave out positions beyond the horizon", est["112DCA"]["n_pos"] == 2, est.get("112DCA"))
+    check("Flights leaves out positions beyond the horizon",
+          all(p[1] < 40 for p in a.get("track", [])), a.get("track"))
     check("an older window is empty", flights.build_flights(db, ref, hours=1, now=T + 7200)["aircraft"] == [])
 
 sys.exit(1 if fails else 0)

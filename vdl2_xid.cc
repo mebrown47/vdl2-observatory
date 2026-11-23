@@ -80,6 +80,9 @@ void Vdl(Xid& x, const Param& p) {
                 // A handoff response was seen with 0xc0 here: 192,000 ft.
                 if (v[3] <= 60) l.altFt = v[3] * 1000;
                 l.altRawFt = v[3] * 1000;
+                // Exactly 0, 0 is an aircraft with no position to give (seen
+                // in handoffs from several aircraft, for days at a time).
+                if (l.lat == 0 && l.lon == 0) return;
                 if (l.lat >= -90 && l.lat <= 90 && l.lon >= -180 && l.lon <= 180) {
                     x.aircraftLocation = l;
                     return;

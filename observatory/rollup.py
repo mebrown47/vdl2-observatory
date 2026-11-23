@@ -489,6 +489,8 @@ class Agg:
                 from_gs = (prev[0] if prev and prev[0] != gs
                            and 0 <= ts - prev[1] <= HANDOFF_WINDOW else None)
                 loc = x.get("ac_location") or {}
+                if loc.get("lat") == 0 and loc.get("lon") == 0:
+                    loc = {}        # no position (archives from before the decoder said so)
                 if loc.get("lat") is not None:
                     self.v_pos.append([ts, icao, gs, loc["lat"], loc["lon"],
                                        loc.get("alt_ft"), "xid", self.snr_of(ev["t"], icao)])
