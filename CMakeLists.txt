@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 # The release version: bump it with each release tag. Builds from a git
 # checkout report `git describe` instead (cmake/version.cmake).
-project(vdl2-sniffer VERSION 1.1.1 LANGUAGES C CXX)
+project(vdl2-sniffer VERSION 1.1.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
