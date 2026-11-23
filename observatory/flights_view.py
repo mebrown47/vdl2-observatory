@@ -55,6 +55,12 @@ FLIGHTS_PAGE = r"""<!doctype html>
   .panel h2{font-size:13px;margin:0 0 10px;font-weight:600;color:var(--fg);
     display:flex;justify-content:space-between;align-items:center;gap:10px}
   .panel h2 .hint{color:var(--dim);font-weight:400;font-size:11.5px}
+  #map{touch-action:none;cursor:grab;user-select:none}
+  .maptools{display:flex;gap:8px;align-items:center;margin:0 0 8px;flex-wrap:wrap}
+  .maptools .lab,.maptools .hint2{color:var(--dim);font-size:11.5px}
+  .mapctl{display:flex;gap:4px}
+  .mapctl button{background:var(--panel2);color:var(--dim);border:1px solid var(--line);padding:3px 9px;border-radius:6px;cursor:pointer;font-size:12px}
+  .mapctl button:hover{color:var(--fg)}
   svg{display:block;overflow:hidden}
   .gl{stroke:var(--grid);stroke-width:1}
   .mapax{fill:var(--dim);font-size:11px}
@@ -108,7 +114,10 @@ FLIGHTS_PAGE = r"""<!doctype html>
       <span><i style="border-color:var(--warn);border-top-style:dashed"></i>to destination (selected aircraft)</span>
       <span><i style="border-color:#4aa8ff;width:9px;height:9px;border:0;background:#4aa8ff"></i>ground station (estimated)</span>
     </div>
+    <div class="maptools"><span class="lab">Zoom</span><span class="mapctl" id="mapctl"><button data-a="in" title="zoom in">+</button><button data-a="out" title="zoom out">−</button><button data-a="core" title="where most aircraft are">Fit core</button><button data-a="all" title="every aircraft">Fit all</button></span>
+      <span class="hint2">scroll to zoom, drag to move</span></div>
     <div id="map"></div>
+    <div id="mapnote" class="sel" style="min-height:0"></div>
     <div id="sel" class="sel"></div>
     <div class="sel" style="text-align:right;min-height:0">map: Natural Earth</div>
   </div>
@@ -190,7 +199,7 @@ function shown(){
     a.xid_dest&&a.xid_dest.code].some(v=>v&&String(v).toUpperCase().includes(f)));
 }
 function dest(a){return a.route?a.route.dest:a.xid_dest;}
-function select(icao){SEL=SEL===icao?null:icao;
+function select(icao){SEL=SEL===icao?null:icao;if(SEL)REFIT="sel";
   history.replaceState(null,"",SEL?"#ac="+SEL:location.pathname+location.search);
   drawMap();markRows();detail();}
 
@@ -199,27 +208,18 @@ function drawMap(){
   const list=shown(),withPos=list.filter(a=>a.track.length);
   if(!withPos.length){host.innerHTML='<div class="empty">no aircraft positions in the last '+hours+' h</div>';return;}
   const sel=SEL?D.aircraft.find(a=>a.icao===SEL):null;
-  // the view: every latest position, and the selected aircraft's track and destination
-  const pts=withPos.map(a=>a.track[a.track.length-1].slice(1,3));
-  if(sel&&sel.track.length){sel.track.forEach(p=>pts.push([p[1],p[2]]));
-    const dd=dest(sel);if(dd&&dd.pos)pts.push(dd.pos);}
-  let la0=Math.min(...pts.map(p=>p[0])),la1=Math.max(...pts.map(p=>p[0]));
-  let lo0=Math.min(...pts.map(p=>p[1])),lo1=Math.max(...pts.map(p=>p[1]));
-  const k=Math.cos((la0+la1)/2*Math.PI/180);
-  const pad=Math.max(0.3,(la1-la0)*0.06,(lo1-lo0)*k*0.06);
-  la0-=pad;la1+=pad;lo0-=pad/k;lo1+=pad/k;
-  const MIN=2;
-  if(la1-la0<MIN){const c=(la0+la1)/2;la0=c-MIN/2;la1=c+MIN/2;}
-  if((lo1-lo0)*k<MIN){const c=(lo0+lo1)/2;lo0=c-MIN/2/k;lo1=c+MIN/2/k;}
-  const W=Math.max(260,host.clientWidth||900);
-  const H=Math.round(Math.max(300,Math.min(620,W*(la1-la0)/((lo1-lo0)*k))));
-  const sc=Math.min(W/((lo1-lo0)*k),H/(la1-la0));
-  const X=lo=>(lo-lo0)*k*sc+(W-(lo1-lo0)*k*sc)/2, Y=la=>(la1-la)*sc+(H-(la1-la0)*sc)/2;
+  if(!V)V=(sel&&sel.track.length?fitSel(sel):null)||fitCore(withPos);
+  else if(REFIT==="core")V=fitCore(withPos)||V;
+  else if(REFIT==="all")V=fitAll(withPos)||V;
+  else if(REFIT==="sel"&&sel)V=fitSel(sel)||V;
+  REFIT=null;
+  const {W,H}=geom(),k=V.k,sc=V.sc;
+  const X=lo=>W/2+(lo-V.cx)*k*sc,Y=la=>H/2-(la-V.cy)*sc;
+  const lo0=V.cx-W/2/(k*sc),lo1=V.cx+W/2/(k*sc),la0=V.cy-H/2/sc,la1=V.cy+H/2/sc;
   host.innerHTML="";const s=el("svg",{viewBox:"0 0 "+W+" "+H,width:W,height:H});host.appendChild(s);
   const bg=el("rect",{x:0,y:0,width:W,height:H,fill:"var(--water)",stroke:"var(--line)"});
   bg.addEventListener("click",()=>{if(SEL)select(SEL);});s.appendChild(bg);
-  const lonAt=x=>lo0+(x-X(lo0))/(k*sc),latAt=y=>la1-(y-Y(la1))/sc;
-  const view=[lonAt(0),latAt(H),lonAt(W),latAt(0)],bgG=outlines(s,X,Y,...view);
+  const view=[lo0,la0,lo1,la1],bgG=outlines(s,X,Y,...view);
   const span=view[2]-view[0],step=span>16?4:span>8?2:1;
   for(let g=Math.ceil(view[0]);g<=view[2];g++){if(g%step)continue;
     s.appendChild(el("line",{x1:X(g),y1:0,x2:X(g),y2:H,class:"gl"}));
@@ -281,7 +281,60 @@ function drawMap(){
       tx.addEventListener("click",e=>{e.stopPropagation();select(a.icao);});s.appendChild(tx);nl++;break;}
     if(nl>=40)break;}
   placeNames(bgG,X,Y,...view,boxes);
+  const kmpx=111.2/sc,nice=[5,10,20,25,50,100,200,250,500,1000,2000].find(v=>v/kmpx>=70)||2000,bw=nice/kmpx;
+  s.appendChild(el("rect",{x:W-bw-34,y:8,width:bw+24,height:22,rx:4,fill:"var(--panel)","fill-opacity":.8}));
+  s.appendChild(el("line",{x1:W-bw-22,y1:24,x2:W-22,y2:24,stroke:"var(--fg)","stroke-width":2}));
+  s.appendChild(el("text",{x:W-bw-22,y:20,class:"mapax"},nice+" km"));
+  const out=withPos.filter(a=>{const p=a.track[a.track.length-1];return p[2]<lo0||p[2]>lo1||p[1]<la0||p[1]>la1;}).length;
+  $("mapnote").textContent=out?out+" of "+withPos.length+" aircraft outside this view: zoom out, drag, or press Fit all.":"";
 }
+
+// The map view: centre (lon, lat) and scale (px per degree of latitude). It
+// opens on the core of the aircraft's latest positions (the middle 80%), so
+// one far-off aircraft can't shrink the rest; selecting an aircraft fits its
+// track and destination once; otherwise the view stays where it is put.
+let V=null,REFIT=null,DRAG=null;
+function geom(){const host=$("map"),W=Math.max(260,host.clientWidth||900);
+  return {W,H:Math.round(Math.max(340,Math.min(620,W*.6)))};}
+function pct(a,p){const b=a.slice().sort((x,y)=>x-y);return b[Math.min(b.length-1,Math.max(0,Math.round(p*(b.length-1))))];}
+function fitBox(la0,la1,lo0,lo1,k){const {W,H}=geom(),MIN=1.5;
+  if(la1-la0<MIN){const c=(la0+la1)/2;la0=c-MIN/2;la1=c+MIN/2;}
+  if((lo1-lo0)*k<MIN){const c=(lo0+lo1)/2;lo0=c-MIN/2/k;lo1=c+MIN/2/k;}
+  return {k,cx:(lo0+lo1)/2,cy:(la0+la1)/2,sc:Math.min(W/((lo1-lo0)*k),H/(la1-la0))};}
+function lastPts(list){return list.map(a=>a.track[a.track.length-1]).map(p=>[p[1],p[2]]);}
+function fitPts(pts,lo,hi,padf){if(!pts.length)return null;
+  const la=pts.map(p=>p[0]),lo_=pts.map(p=>p[1]),k=Math.cos(pct(la,.5)*Math.PI/180);
+  const a=pct(la,lo),b=pct(la,hi),c=pct(lo_,lo),d=pct(lo_,hi),pl=(b-a)*padf+.15,po=(d-c)*padf+.15/k;
+  return fitBox(a-pl,b+pl,c-po,d+po,k);}
+function fitCore(list){return fitPts(lastPts(list),.1,.9,.3);}
+function fitAll(list){return fitPts(lastPts(list),0,1,.05);}
+function fitSel(a){const pts=a.track.map(p=>[p[1],p[2]]),dd=dest(a);if(dd&&dd.pos)pts.push(dd.pos);
+  if(a.route&&a.route.origin&&a.route.origin.pos)pts.push(a.route.origin.pos);
+  const v=fitPts(pts,0,1,.08);
+  // keep the current zoom if all of it already fits
+  if(V&&v){const {W,H}=geom(),inV=p=>Math.abs((p[1]-V.cx)*V.k*V.sc)<W/2-20&&Math.abs((p[0]-V.cy)*V.sc)<H/2-20;
+    if(pts.every(inV))return V;}
+  return v;}
+function zoom(f,mx,my){const {W,H}=geom();if(mx==null){mx=W/2;my=H/2;}
+  const sc=Math.max(15,Math.min(3000,V.sc*f));
+  const lon=V.cx+(mx-W/2)/(V.k*V.sc),lat=V.cy-(my-H/2)/V.sc;
+  V.cx=lon-(mx-W/2)/(V.k*sc);V.cy=lat+(my-H/2)/sc;V.sc=sc;redraw();}
+let rq=0;function redraw(){if(!rq)rq=requestAnimationFrame(()=>{rq=0;drawMap();});}
+(function(){const host=$("map");
+  host.addEventListener("wheel",e=>{if(!V)return;e.preventDefault();const r=host.getBoundingClientRect();
+    zoom(e.deltaY<0?1.25:.8,e.clientX-r.left,e.clientY-r.top);},{passive:false});
+  host.addEventListener("pointerdown",e=>{if(!V||e.button)return;DRAG={x:e.clientX,y:e.clientY,moved:false};});
+  host.addEventListener("pointermove",e=>{if(!DRAG)return;const dx=e.clientX-DRAG.x,dy=e.clientY-DRAG.y;
+    if(!DRAG.moved&&Math.hypot(dx,dy)<4)return;
+    if(!DRAG.moved){DRAG.moved=true;host.setPointerCapture(e.pointerId);host.style.cursor="grabbing";}
+    V.cx-=dx/(V.k*V.sc);V.cy+=dy/V.sc;DRAG.x=e.clientX;DRAG.y=e.clientY;redraw();});
+  const up=()=>{host.style.cursor="";if(DRAG&&DRAG.moved)setTimeout(()=>{DRAG=null;},0);else DRAG=null;};
+  host.addEventListener("pointerup",up);host.addEventListener("pointercancel",up);
+  // a drag is not a click on whatever it ended over
+  host.addEventListener("click",e=>{if(DRAG&&DRAG.moved){e.stopPropagation();e.preventDefault();}},true);
+  document.querySelectorAll("#mapctl button").forEach(b=>b.addEventListener("click",()=>{if(!V)return;
+    const a=b.dataset.a;if(a==="in")zoom(1.5);else if(a==="out")zoom(1/1.5);else{REFIT=a;drawMap();}}));
+})();
 
 function routeCell(a){
   if(a.route){const r=a.route;
@@ -342,7 +395,7 @@ async function load(){
 }
 document.querySelectorAll("#win button").forEach(b=>b.addEventListener("click",()=>{
   document.querySelectorAll("#win button").forEach(x=>x.classList.toggle("on",x===b));hours=+b.dataset.h;load();}));
-$("find").addEventListener("input",e=>{FIND=e.target.value;if(D){drawMap();drawList();}});
+$("find").addEventListener("input",e=>{FIND=e.target.value;REFIT="core";if(D){drawMap();drawList();}});
 let rt=null;window.addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>{if(D)drawMap();},200);});
 load();setInterval(load,60000);
 </script>
